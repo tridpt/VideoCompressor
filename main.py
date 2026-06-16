@@ -1,7 +1,7 @@
 import customtkinter as ctk
-import tkinter as tk
 from tkinter import filedialog, messagebox
 import os
+import sys
 import subprocess
 import threading
 import static_ffmpeg
@@ -78,7 +78,7 @@ class VideoCompressorApp(ctk.CTk):
         self.check_720p.pack(side="left", padx=10, pady=10)
 
         # Progress bar
-        self.progress_bar = ctk.CTkProgressBar(self, mode="indeterminate")
+        self.progress_bar = ctk.CTkProgressBar(self, mode="determinate")
         self.progress_bar.pack(pady=20, padx=20, fill="x")
         self.progress_bar.set(0)
 
@@ -110,22 +110,79 @@ class VideoCompressorApp(ctk.CTk):
             messagebox.showwarning("Cảnh báo", "Vui lòng chọn video trước khi nén!")
             return
 
-        # Nơi lưu file đầu ra
+        # Nơi lưu file đầu ra (tránh ghi đè file đã tồn tại)
         file_dir, file_name = os.path.split(self.input_file)
         name, ext = os.path.splitext(file_name)
-        self.output_file = os.path.join(file_dir, f"{name}_da_nen{ext}")
+        candidate = os.path.join(file_dir, f"{name}_da_nen{ext}")
+        counter = 1
+        while os.path.exists(candidate):
+            candidate = os.path.join(file_dir, f"{name}_da_nen ({counter}){ext}")
+            counter += 1
+        self.output_file = candidate
 
-        # Vô hiệu hóa nút và chạy progress
+        # Vô hiệu hóa nút và reset thanh tiến trình về 0
         self.btn_start.configure(state="disabled", text="Đang xử lý, vui lòng chờ...")
-        self.progress_bar.start()
+        self.progress_bar.set(0)
         self.lbl_status.configure(text="Đang nén video... Máy tính hơi nóng là bình thường nhé!", text_color="orange")
 
         # Chạy logic nén trong luồng riêng để không bị đơ UI
         crf_value = int(self.slider_quality.get())
         threading.Thread(target=self.run_ffmpeg, args=(crf_value,), daemon=True).start()
 
+    def open_folder(self, path):
+        """Mở thư mục chứa file đầu ra trên mọi nền tảng."""
+        try:
+            if os.name == 'nt':
+                os.startfile(path)
+            elif sys.platform == 'darwin':
+                subprocess.run(['open', path])
+            else:
+                subprocess.run(['xdg-open', path])
+        except Exception:
+            pass
+
+    def write_error_log(self, error_text):
+        """Ghi toàn bộ lỗi FFmpeg ra file log cạnh file gốc để tiện debug."""
+        try:
+            log_dir = os.path.dirname(self.input_file) or os.getcwd()
+            log_path = os.path.join(log_dir, 'video_compressor_error.log')
+            with open(log_path, 'w', encoding='utf-8') as f:
+                f.write(error_text)
+            return log_path
+        except Exception:
+            return None
+
+    def get_video_duration(self, path):
+        """Lấy độ dài video (giây) bằng ffprobe để tính phần trăm tiến trình."""
+        try:
+            result = subprocess.run(
+                [
+                    'ffprobe', '-v', 'error',
+                    '-show_entries', 'format=duration',
+                    '-of', 'default=noprint_wrappers=1:nokey=1',
+                    path
+                ],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            )
+            return float(result.stdout.decode('utf-8').strip())
+        except (ValueError, FileNotFoundError):
+            return 0.0
+
+    def update_progress(self, fraction):
+        """Cập nhật thanh tiến trình và nhãn % an toàn từ luồng chính."""
+        fraction = max(0.0, min(fraction, 1.0))
+        self.progress_bar.set(fraction)
+        self.lbl_status.configure(
+            text=f"Đang nén video... {int(fraction * 100)}%",
+            text_color="orange"
+        )
+
     def run_ffmpeg(self, crf_value):
         try:
+            # Tổng thời lượng video, dùng để quy ra phần trăm tiến trình
+            total_duration = self.get_video_duration(self.input_file)
+
             # Lệnh FFmpeg siêu mạnh
             command = [
                 'ffmpeg',
@@ -141,14 +198,35 @@ class VideoCompressorApp(ctk.CTk):
                 # Lệnh scale của FFmpeg: đưa chiều cao về 720, chiều rộng tự động nội suy (-2) để giữ đúng tỷ lệ khung hình
                 command.extend(['-vf', 'scale=-2:720'])
             
-            # Thêm nén âm thanh và đầu ra
+            # Thêm nén âm thanh, xuất tiến trình ra stdout và đường dẫn đầu ra
             command.extend([
                 '-acodec', 'aac', # Nén luôn âm thanh
+                '-progress', 'pipe:1', # In tiến trình theo máy đọc ra stdout
+                '-nostats',
                 self.output_file
             ])
 
-            # subprocess.PIPE sẽ giấu output màn hình đen đi
-            process = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+            # Mở tiến trình và đọc dần stdout để cập nhật phần trăm
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                universal_newlines=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
+            )
+
+            for line in process.stdout:
+                line = line.strip()
+                if line.startswith('out_time_ms=') and total_duration > 0:
+                    try:
+                        out_time_ms = int(line.split('=', 1)[1])
+                        fraction = (out_time_ms / 1_000_000) / total_duration
+                        self.after(0, self.update_progress, fraction)
+                    except ValueError:
+                        pass
+
+            # Đợi tiến trình kết thúc và lấy phần stderr còn lại
+            stderr_output = process.stderr.read()
+            process.wait()
 
             if process.returncode == 0:
                 # Thành công
@@ -160,9 +238,12 @@ class VideoCompressorApp(ctk.CTk):
                 # Cập nhật UI an toàn từ luồng phụ vào luồng chính qua phương thức after()
                 self.after(0, self.finish_compression, success_msg, "green", "BẮT ĐẦU NÉN VIDEO")
             else:
-                # Lỗi
-                error_msg = process.stderr.decode('utf-8')
-                self.after(0, self.finish_compression, "❌ Lỗi: " + error_msg[:100] + "...", "red", "THỬ LẠI")
+                # Lỗi - ghi full log ra file, hiển thị gọn trên UI
+                log_path = self.write_error_log(stderr_output)
+                short_msg = "❌ Lỗi khi nén video."
+                if log_path:
+                    short_msg += f" Chi tiết đã lưu tại: {os.path.basename(log_path)}"
+                self.after(0, self.finish_compression, short_msg, "red", "THỬ LẠI")
 
         except Exception as e:
             self.after(0, self.finish_compression, f"❌ Lỗi do hệ thống: {str(e)}", "red", "THỬ LẠI")
@@ -173,13 +254,9 @@ class VideoCompressorApp(ctk.CTk):
         self.btn_start.configure(state="normal", text=btn_text)
         self.lbl_status.configure(text=status_text, text_color=text_color)
         
-        # Mở thư mục chứa file
+        # Mở thư mục chứa file (đa nền tảng)
         if "XONG" in status_text and hasattr(self, 'output_file'):
-             try:
-                 if os.name == 'nt':
-                     os.startfile(os.path.dirname(self.output_file))
-             except Exception:
-                 pass
+            self.open_folder(os.path.dirname(self.output_file))
 
 if __name__ == "__main__":
     app = VideoCompressorApp()
