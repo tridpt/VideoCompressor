@@ -9,8 +9,12 @@ A fast, lightweight, and user-friendly GUI application built with Python and `Cu
 * **Customizable Compression:** Includes an interactive slider to dial in the perfect CRF (Constant Rate Factor) value, giving you total control over the balance between compression strength and output quality (Defaults to a recommended 28).
 * **Extreme Compression Mode:** Check the "Force 720p HD" option to rapidly scale down huge 4K or 1080p videos to 720p, achieving unparalleled file size reduction while maintaining the exact aspect ratio.
 * **Smart Audio Handling:** Compresses embedded audio utilizing the `AAC` codec to ensure maximum space-saving efficiency.
+* **Real-Time Progress:** A live progress bar shows the exact completion percentage while encoding, calculated by reading FFmpeg's `-progress` output against the video's total duration (via `ffprobe`). No more guessing how long is left.
+* **Overwrite-Safe Output:** Never silently clobbers existing files. If `video_da_nen.mp4` already exists, the app automatically saves to `video_da_nen (1).mp4`, `(2)`, and so on.
+* **Full Error Logging:** When FFmpeg fails, the complete error output is written to `video_compressor_error.log` next to your source file, while the UI shows a clean summary. Makes debugging painless.
 * **Auto-Portable FFmpeg:** Integrates `static_ffmpeg` to automatically handle downloading and linking the required FFmpeg binaries onto your machine so you don't have to fiddle with System Environment Variables.
 * **Fast and Non-Blocking:** Processes the intensive FFmpeg operations in a background thread, preventing the application UI from freezing. It updates you in real-time and opens the output folder immediately upon finish.
+* **Cross-Platform Folder Open:** Automatically opens the output folder when done on Windows, macOS, and Linux.
 
 ## 🚀 Installation & Requirements
 
