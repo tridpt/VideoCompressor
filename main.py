@@ -2,6 +2,7 @@ import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import os
 import sys
+import json
 import time
 import subprocess
 import threading
@@ -20,37 +21,101 @@ CODECS = {
     "H.264 (tương thích rộng)": "libx264",
 }
 
+# Nơi lưu cấu hình (cạnh file script để dễ tìm)
+CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+
+# Màu trạng thái từng file
+STATUS_COLORS = {
+    "chờ": "gray",
+    "đang nén": "orange",
+    "xong": "#3ba55d",
+    "lỗi": "#e02f2f",
+    "bỏ qua": "#e0a82f",
+}
+
 
 class VideoCompressorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
         self.title("Super Video Compressor (Free & Lossless Quality)")
-        self.geometry("600x680")
-        self.resizable(False, False)
+        self.geometry("640x860")
+        self.minsize(640, 860)
 
         # Danh sách file đầu vào (hỗ trợ nén hàng loạt)
         self.input_files = []
         self.output_file = ""   # file đầu ra đang xử lý
+        self.row_widgets = {}   # input_path -> {"frame":, "status":} để cập nhật trạng thái
 
         # Trạng thái tiến trình nén
         self.process = None        # tham chiếu tới tiến trình ffmpeg đang chạy
         self.is_cancelled = False  # cờ đánh dấu người dùng đã bấm Hủy
         self.batch_start_time = 0  # mốc thời gian bắt đầu cả lô (để tính ETA)
 
+        # Đọc cấu hình đã lưu (nếu có)
+        self.config = self.load_config()
+        self.last_dir = self.config.get("last_dir", "")
+
         self.build_ui()
+        self.apply_config()
+
+        # Lưu cấu hình khi đóng cửa sổ
+        self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    # ---------- Cấu hình ----------
+    def load_config(self):
+        """Đọc config.json. Trả về dict rỗng nếu không có/đọc lỗi."""
+        try:
+            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                return data if isinstance(data, dict) else {}
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return {}
+
+    def save_config(self):
+        """Ghi lựa chọn hiện tại ra config.json để lần sau khỏi chỉnh lại."""
+        try:
+            data = {
+                "codec": self.codec_selector.get(),
+                "crf": int(self.slider_quality.get()),
+                "force_720p": bool(self.check_720p.get()),
+                "last_dir": self.last_dir,
+            }
+            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except OSError:
+            pass
+
+    def apply_config(self):
+        """Áp các giá trị đã lưu lên widget khi mở app."""
+        codec = self.config.get("codec")
+        if codec in CODECS:
+            self.codec_selector.set(codec)
+
+        crf = self.config.get("crf")
+        if isinstance(crf, (int, float)) and 18 <= crf <= 50:
+            self.slider_quality.set(int(crf))
+            self.update_crf_label(int(crf))
+
+        if self.config.get("force_720p"):
+            self.check_720p.select()
+
+    def on_close(self):
+        """Lưu cấu hình rồi đóng app."""
+        self.save_config()
+        self.destroy()
 
     def build_ui(self):
         # Tiêu đề
         self.lbl_title = ctk.CTkLabel(self, text="⚡ NÉN VIDEO SIÊU TỐC ⚡", font=("Roboto", 24, "bold"))
-        self.lbl_title.pack(pady=(20, 10))
+        self.lbl_title.pack(pady=(18, 6))
 
         self.lbl_subtitle = ctk.CTkLabel(self, text="Giảm đến 90% dung lượng mà không nhận ra sự khác biệt!", font=("Roboto", 13), text_color="gray")
-        self.lbl_subtitle.pack(pady=(0, 15))
+        self.lbl_subtitle.pack(pady=(0, 12))
 
         # Khung chọn file
         self.frame_file = ctk.CTkFrame(self)
-        self.frame_file.pack(pady=10, padx=20, fill="x")
+        self.frame_file.pack(pady=8, padx=20, fill="x")
 
         self.lbl_file_path = ctk.CTkLabel(self.frame_file, text="Chưa chọn video nào...", width=380, anchor="w")
         self.lbl_file_path.pack(side="left", padx=10, pady=10)
@@ -58,9 +123,13 @@ class VideoCompressorApp(ctk.CTk):
         self.btn_select = ctk.CTkButton(self.frame_file, text="Chọn Video", command=self.select_files, width=110)
         self.btn_select.pack(side="right", padx=10, pady=10)
 
+        # Danh sách file (cuộn được) hiển thị trạng thái từng video
+        self.frame_list = ctk.CTkScrollableFrame(self, height=130, label_text="Danh sách video")
+        self.frame_list.pack(pady=8, padx=20, fill="x")
+
         # Chọn codec
         self.frame_codec = ctk.CTkFrame(self)
-        self.frame_codec.pack(pady=10, padx=20, fill="x")
+        self.frame_codec.pack(pady=8, padx=20, fill="x")
 
         self.lbl_codec = ctk.CTkLabel(self.frame_codec, text="Codec:")
         self.lbl_codec.pack(side="left", padx=10, pady=10)
@@ -71,7 +140,7 @@ class VideoCompressorApp(ctk.CTk):
 
         # Mức độ nén (CRF)
         self.frame_quality = ctk.CTkFrame(self)
-        self.frame_quality.pack(pady=10, padx=20, fill="x")
+        self.frame_quality.pack(pady=8, padx=20, fill="x")
 
         self.lbl_quality = ctk.CTkLabel(self.frame_quality, text="Mức nén (CRF):")
         self.lbl_quality.pack(side="left", padx=10, pady=10)
@@ -83,16 +152,7 @@ class VideoCompressorApp(ctk.CTk):
         self.lbl_crf_val = ctk.CTkLabel(self.frame_quality, text="28 (Khuyên dùng)")
         self.lbl_crf_val.pack(side="right", padx=10, pady=10)
 
-        def update_crf_label(value):
-            if value < 23:
-                txt = f"{int(value)} (Dung lượng lớn)"
-            elif value > 35:
-                txt = f"{int(value)} (Ép nén mạnh)"
-            else:
-                txt = f"{int(value)} (Khuyên dùng)"
-            self.lbl_crf_val.configure(text=txt)
-
-        self.slider_quality.configure(command=update_crf_label)
+        self.slider_quality.configure(command=lambda v: self.update_crf_label(v))
 
         # Tuỳ chọn ép giảm cấu hình
         self.frame_options = ctk.CTkFrame(self)
@@ -103,7 +163,7 @@ class VideoCompressorApp(ctk.CTk):
 
         # Progress bar (kèm nhãn cho dễ thấy)
         self.lbl_progress = ctk.CTkLabel(self, text="Tiến trình nén:", anchor="w")
-        self.lbl_progress.pack(pady=(10, 0), padx=20, fill="x")
+        self.lbl_progress.pack(pady=(8, 0), padx=20, fill="x")
 
         self.progress_bar = ctk.CTkProgressBar(
             self,
@@ -112,12 +172,12 @@ class VideoCompressorApp(ctk.CTk):
             progress_color="#1f6aa5",  # màu fill rõ ràng
             fg_color="#4a4a4a",        # màu track nền sáng hơn nền Dark
         )
-        self.progress_bar.pack(pady=(2, 15), padx=20, fill="x")
+        self.progress_bar.pack(pady=(2, 12), padx=20, fill="x")
         self.progress_bar.set(0)
 
         # Khung chứa nút Bắt đầu và Hủy
         self.frame_actions = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_actions.pack(pady=10, padx=20, fill="x")
+        self.frame_actions.pack(pady=8, padx=20, fill="x")
 
         self.btn_start = ctk.CTkButton(self.frame_actions, text="🚀 BẮT ĐẦU NÉN VIDEO", font=("Roboto", 16, "bold"), height=50, command=self.start_compression)
         self.btn_start.pack(side="left", expand=True, fill="x", padx=(0, 5))
@@ -130,8 +190,47 @@ class VideoCompressorApp(ctk.CTk):
         self.btn_cancel.pack(side="right", padx=(5, 0))
 
         # Trạng thái
-        self.lbl_status = ctk.CTkLabel(self, text="", text_color="green", font=("Roboto", 14))
-        self.lbl_status.pack(pady=10)
+        self.lbl_status = ctk.CTkLabel(self, text="", text_color="green", font=("Roboto", 14), wraplength=600)
+        self.lbl_status.pack(pady=(8, 16))
+
+    def update_crf_label(self, value):
+        value = int(float(value))
+        if value < 23:
+            txt = f"{value} (Dung lượng lớn)"
+        elif value > 35:
+            txt = f"{value} (Ép nén mạnh)"
+        else:
+            txt = f"{value} (Khuyên dùng)"
+        self.lbl_crf_val.configure(text=txt)
+
+    # ---------- Danh sách file ----------
+    def rebuild_file_list(self):
+        """Vẽ lại danh sách file với trạng thái ban đầu là 'chờ'."""
+        # Xóa các dòng cũ
+        for child in self.frame_list.winfo_children():
+            child.destroy()
+        self.row_widgets = {}
+
+        for path in self.input_files:
+            row = ctk.CTkFrame(self.frame_list)
+            row.pack(fill="x", pady=2, padx=2)
+
+            lbl_name = ctk.CTkLabel(row, text=os.path.basename(path), anchor="w")
+            lbl_name.pack(side="left", padx=8, pady=4, expand=True, fill="x")
+
+            lbl_status = ctk.CTkLabel(row, text="● chờ", width=90, anchor="e", text_color=STATUS_COLORS["chờ"])
+            lbl_status.pack(side="right", padx=8, pady=4)
+
+            self.row_widgets[path] = {"frame": row, "status": lbl_status}
+
+    def set_file_status(self, path, status):
+        """Cập nhật nhãn trạng thái của một file (gọi an toàn từ luồng chính)."""
+        widget = self.row_widgets.get(path)
+        if widget:
+            widget["status"].configure(
+                text=f"● {status}",
+                text_color=STATUS_COLORS.get(status, "gray")
+            )
 
     # ---------- Chọn file ----------
     def select_files(self):
@@ -139,13 +238,20 @@ class VideoCompressorApp(ctk.CTk):
             ('Video files', '*.mp4 *.mkv *.avi *.mov *.flv'),
             ('All files', '*.*')
         )
-        filenames = filedialog.askopenfilenames(title="Chọn video gốc (có thể chọn nhiều)", filetypes=filetypes)
+        initial = self.last_dir if self.last_dir and os.path.isdir(self.last_dir) else None
+        filenames = filedialog.askopenfilenames(
+            title="Chọn video gốc (có thể chọn nhiều)",
+            filetypes=filetypes,
+            initialdir=initial
+        )
         if filenames:
             self.input_files = list(filenames)
+            self.last_dir = os.path.dirname(self.input_files[0])
             if len(self.input_files) == 1:
                 self.lbl_file_path.configure(text=os.path.basename(self.input_files[0]))
             else:
                 self.lbl_file_path.configure(text=f"Đã chọn {len(self.input_files)} video")
+            self.rebuild_file_list()
             self.lbl_status.configure(text="")
             self.progress_bar.stop()
             self.progress_bar.set(0)
@@ -182,9 +288,16 @@ class VideoCompressorApp(ctk.CTk):
             messagebox.showwarning("Cảnh báo", "Vui lòng chọn video trước khi nén!")
             return
 
+        # Lưu cấu hình ngay khi bắt đầu (nhớ lựa chọn cho lần sau)
+        self.save_config()
+
         # Reset cờ hủy + mốc thời gian cho lô mới
         self.is_cancelled = False
         self.batch_start_time = time.time()
+
+        # Đặt lại trạng thái mọi file về 'chờ'
+        for path in self.input_files:
+            self.set_file_status(path, "chờ")
 
         # Khóa các nút điều khiển, bật nút Hủy
         self.btn_start.configure(state="disabled", text="Đang xử lý, vui lòng chờ...")
@@ -233,8 +346,8 @@ class VideoCompressorApp(ctk.CTk):
         try:
             log_dir = os.path.dirname(self.input_files[0]) if self.input_files else os.getcwd()
             log_path = os.path.join(log_dir, 'video_compressor_error.log')
-            with open(log_path, 'w', encoding='utf-8') as f:
-                f.write(error_text)
+            with open(log_path, 'a', encoding='utf-8') as f:
+                f.write(error_text + "\n" + ("-" * 60) + "\n")
             return log_path
         except Exception:
             return None
@@ -309,8 +422,10 @@ class VideoCompressorApp(ctk.CTk):
                 valid, err_msg = self.validate_input_file(input_path)
                 if not valid:
                     self.write_error_log(f"Bỏ qua {input_path}: {err_msg}")
+                    self.after(0, self.set_file_status, input_path, "bỏ qua")
                     continue
 
+                self.after(0, self.set_file_status, input_path, "đang nén")
                 self.output_file = self.make_output_path(input_path)
                 ok = self.compress_one(
                     input_path, self.output_file, crf_value, vcodec, force_720p,
@@ -321,6 +436,9 @@ class VideoCompressorApp(ctk.CTk):
                     break
                 if ok:
                     success_count += 1
+                    self.after(0, self.set_file_status, input_path, "xong")
+                else:
+                    self.after(0, self.set_file_status, input_path, "lỗi")
 
             # Tổng kết
             if self.is_cancelled:

@@ -6,6 +6,8 @@ A fast, lightweight, and user-friendly GUI application built with Python and `Cu
 
 * **Modern GUI:** A sleek Dark Mode interface built using `CustomTkinter`. Simple and responsive.
 * **Batch Compression:** Select multiple videos at once and the app compresses them one after another, reporting overall progress and a final summary (e.g. "3/3 done"). Files that fail validation are skipped and logged, so one bad file won't stop the whole batch.
+* **Scrollable File List:** Every selected video appears in a scrollable list with a live, color-coded status (waiting / compressing / done / failed / skipped), so you can see exactly where each file is in a batch.
+* **Remembers Your Choices:** Your codec, CRF, 720p option, and last-used folder are saved to a local `config.json` and restored next time you open the app, no need to reconfigure.
 * **Codec Choice:** Pick between **H.265 (`libx265`)** for the deepest compression or **H.264 (`libx264`)** for the widest device/player compatibility.
 * **Lossless-like Quality:** Uses highly efficient modern codecs to minimize file size while preserving stunning visual details.
 * **Customizable Compression:** Includes an interactive slider to dial in the perfect CRF (Constant Rate Factor) value, giving you total control over the balance between compression strength and output quality (Defaults to a recommended 28).

@@ -16,3 +16,7 @@ env/
 build/
 dist/
 *.spec
+
+# App config & logs cá nhân
+config.json
+video_compressor_error.log
