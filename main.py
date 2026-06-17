@@ -170,7 +170,7 @@ class VideoCompressorApp(ctk.CTk):
         self.btn_select.pack(side="right", padx=(5, 10), pady=10)
 
         self.btn_clear = ctk.CTkButton(
-            self.frame_file, text="Xóa danh sách", command=self.clear_files, width=110,
+            self.frame_file, text="Bỏ chọn", command=self.clear_files, width=110,
             fg_color="#5a5a5a", hover_color="#454545", state="disabled"
         )
         self.btn_clear.pack(side="right", padx=(10, 0), pady=10)
