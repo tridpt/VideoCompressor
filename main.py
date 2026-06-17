@@ -18,7 +18,7 @@ class VideoCompressorApp(ctk.CTk):
         super().__init__()
 
         self.title("Super Video Compressor (Free & Lossless Quality)")
-        self.geometry("600x450")
+        self.geometry("600x600")
         self.resizable(False, False)
 
         # File path variables
@@ -77,9 +77,18 @@ class VideoCompressorApp(ctk.CTk):
         self.check_720p = ctk.CTkCheckBox(self.frame_options, text="Ép video về chất lượng HD 720p (Đảm bảo dung lượng sẽ giảm cực sâu)")
         self.check_720p.pack(side="left", padx=10, pady=10)
 
-        # Progress bar
-        self.progress_bar = ctk.CTkProgressBar(self, mode="determinate")
-        self.progress_bar.pack(pady=20, padx=20, fill="x")
+        # Progress bar (kèm nhãn cho dễ thấy)
+        self.lbl_progress = ctk.CTkLabel(self, text="Tiến trình nén:", anchor="w")
+        self.lbl_progress.pack(pady=(10, 0), padx=20, fill="x")
+
+        self.progress_bar = ctk.CTkProgressBar(
+            self,
+            mode="determinate",
+            height=20,                 # cao hơn để dễ nhìn
+            progress_color="#1f6aa5",  # màu fill rõ ràng
+            fg_color="#4a4a4a",        # màu track nền sáng hơn nền Dark
+        )
+        self.progress_bar.pack(pady=(2, 15), padx=20, fill="x")
         self.progress_bar.set(0)
 
         # Nút Bắt đầu
@@ -214,6 +223,18 @@ class VideoCompressorApp(ctk.CTk):
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
 
+            # QUAN TRỌNG: libx265 ghi rất nhiều ra stderr. Nếu không đọc song song,
+            # buffer stderr đầy sẽ làm ffmpeg treo (deadlock) và tiến trình đứng hình.
+            # Vì vậy đọc stderr liên tục bằng một luồng riêng.
+            stderr_lines = []
+
+            def drain_stderr():
+                for err_line in process.stderr:
+                    stderr_lines.append(err_line)
+
+            stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+            stderr_thread.start()
+
             for line in process.stdout:
                 line = line.strip()
                 if line.startswith('out_time_ms=') and total_duration > 0:
@@ -224,9 +245,10 @@ class VideoCompressorApp(ctk.CTk):
                     except ValueError:
                         pass
 
-            # Đợi tiến trình kết thúc và lấy phần stderr còn lại
-            stderr_output = process.stderr.read()
+            # Đợi tiến trình và luồng đọc stderr kết thúc
             process.wait()
+            stderr_thread.join(timeout=5)
+            stderr_output = ''.join(stderr_lines)
 
             if process.returncode == 0:
                 # Thành công
