@@ -5,11 +5,15 @@ A fast, lightweight, and user-friendly GUI application built with Python and `Cu
 ## 🌟 Features
 
 * **Modern GUI:** A sleek Dark Mode interface built using `CustomTkinter`. Simple and responsive.
-* **Lossless-like Quality:** Uses the highly efficient H.265 (`libx265`) codec to minimize file size while preserving stunning visual details.
+* **Batch Compression:** Select multiple videos at once and the app compresses them one after another, reporting overall progress and a final summary (e.g. "3/3 done"). Files that fail validation are skipped and logged, so one bad file won't stop the whole batch.
+* **Codec Choice:** Pick between **H.265 (`libx265`)** for the deepest compression or **H.264 (`libx264`)** for the widest device/player compatibility.
+* **Lossless-like Quality:** Uses highly efficient modern codecs to minimize file size while preserving stunning visual details.
 * **Customizable Compression:** Includes an interactive slider to dial in the perfect CRF (Constant Rate Factor) value, giving you total control over the balance between compression strength and output quality (Defaults to a recommended 28).
+* **Cancel Anytime:** A dedicated cancel button stops the running encode immediately and cleans up the unfinished output file.
+* **Input Validation:** Before encoding, each file is checked with `ffprobe` to confirm it exists, isn't empty, and actually contains a video stream, surfacing a clear error instead of a cryptic FFmpeg failure.
 * **Extreme Compression Mode:** Check the "Force 720p HD" option to rapidly scale down huge 4K or 1080p videos to 720p, achieving unparalleled file size reduction while maintaining the exact aspect ratio.
 * **Smart Audio Handling:** Compresses embedded audio utilizing the `AAC` codec to ensure maximum space-saving efficiency.
-* **Real-Time Progress:** A live progress bar shows the exact completion percentage while encoding, calculated by reading FFmpeg's `-progress` output against the video's total duration (via `ffprobe`). No more guessing how long is left.
+* **Real-Time Progress & ETA:** A live progress bar shows the exact completion percentage while encoding, alongside an estimated time remaining. Progress is calculated by reading FFmpeg's `-progress` output against the video's total duration (via `ffprobe`). For batches, the bar reflects overall progress across all files.
 * **Overwrite-Safe Output:** Never silently clobbers existing files. If `video_da_nen.mp4` already exists, the app automatically saves to `video_da_nen (1).mp4`, `(2)`, and so on.
 * **Full Error Logging:** When FFmpeg fails, the complete error output is written to `video_compressor_error.log` next to your source file, while the UI shows a clean summary. Makes debugging painless.
 * **Auto-Portable FFmpeg:** Integrates `static_ffmpeg` to automatically handle downloading and linking the required FFmpeg binaries onto your machine so you don't have to fiddle with System Environment Variables.
@@ -38,10 +42,11 @@ Ensure you have **Python 3.8+** installed.
 
 ## 🎮 How to Use
 
-1. Click **Chọn Video (Select Video)** and browse for the `.mp4`, `.mkv`, or `.avi` file you wish to compress.
-2. Select your compression level using the **CRF slider**. A lower value means larger files & better quality, whereas a higher value means stronger compression & slightly degraded quality. 28 is the sweet spot.
-3. *Optional:* Select the 720p downscaler if you're compressing massive videos to send via email or Discord.
-4. Hit **BẮT ĐẦU NÉN VIDEO (START)** and let the magic happen. The tool will notify you of the original vs new file size upon completion.
+1. Click **Chọn Video (Select Video)** and browse for one or more `.mp4`, `.mkv`, `.mov`, or `.avi` files. You can select multiple videos to compress them as a batch.
+2. Pick a **codec**: H.265 for the smallest files, or H.264 for the broadest compatibility.
+3. Select your compression level using the **CRF slider**. A lower value means larger files & better quality, whereas a higher value means stronger compression & slightly degraded quality. 28 is the sweet spot.
+4. *Optional:* Select the 720p downscaler if you're compressing massive videos to send via email or Discord.
+5. Hit **BẮT ĐẦU NÉN VIDEO (START)** and watch the progress bar and ETA. You can press **HỦY (Cancel)** at any time to stop. The output folder opens automatically when finished.
 
 ## 👨‍💻 Developer Notes
 
