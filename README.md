@@ -56,3 +56,5 @@ Ensure you have **Python 3.8+** installed.
 
 Developed by **Trần Đức Trí**.
 Created to solve the hassle of memorizing long FFmpeg command lines for simple video crunching tasks.
+
+For architecture, code internals, and contribution guidelines, see the [technical documentation (DOCS.md)](DOCS.md).
