@@ -6,6 +6,12 @@
 
 A fast, lightweight, and user-friendly GUI application built with Python and `CustomTkinter`. It utilizes the sheer power of `FFmpeg` to drastically compress your videos, often reducing file sizes by up to 90% without any noticeable loss in visual quality!
 
+## 📸 Screenshots
+
+| Compressing a batch | Finished |
+|---|---|
+| ![App compressing videos](docs/screenshot.png) | ![Compression complete](docs/screenshot-done.png) |
+
 ## 🌟 Features
 
 * **Modern GUI:** A sleek Dark Mode interface built using `CustomTkinter`. Simple and responsive.
