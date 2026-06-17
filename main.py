@@ -34,6 +34,50 @@ STATUS_COLORS = {
 }
 
 
+# ---------- Hàm logic thuần (tách riêng để dễ test, không phụ thuộc GUI) ----------
+def make_output_path(input_path, exists=os.path.exists):
+    """Tạo đường dẫn đầu ra, tránh ghi đè file đã tồn tại.
+    `exists` cho phép thay hàm kiểm tra tồn tại khi test."""
+    file_dir, file_name = os.path.split(input_path)
+    name, ext = os.path.splitext(file_name)
+    candidate = os.path.join(file_dir, f"{name}_da_nen{ext}")
+    counter = 1
+    while exists(candidate):
+        candidate = os.path.join(file_dir, f"{name}_da_nen ({counter}){ext}")
+        counter += 1
+    return candidate
+
+
+def format_eta(seconds):
+    """Định dạng số giây còn lại thành mm:ss (hoặc h:mm:ss)."""
+    seconds = int(max(0, seconds))
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h > 0:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
+
+def load_config(path=CONFIG_PATH):
+    """Đọc config.json. Trả về dict rỗng nếu không có/đọc lỗi."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+
+
+def save_config(data, path=CONFIG_PATH):
+    """Ghi dict cấu hình ra file JSON. Trả về True nếu thành công."""
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        return True
+    except OSError:
+        return False
+
+
 class VideoCompressorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -64,27 +108,18 @@ class VideoCompressorApp(ctk.CTk):
 
     # ---------- Cấu hình ----------
     def load_config(self):
-        """Đọc config.json. Trả về dict rỗng nếu không có/đọc lỗi."""
-        try:
-            with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                return data if isinstance(data, dict) else {}
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            return {}
+        """Đọc config.json (dùng hàm logic thuần cấp module)."""
+        return load_config(CONFIG_PATH)
 
     def save_config(self):
         """Ghi lựa chọn hiện tại ra config.json để lần sau khỏi chỉnh lại."""
-        try:
-            data = {
-                "codec": self.codec_selector.get(),
-                "crf": int(self.slider_quality.get()),
-                "force_720p": bool(self.check_720p.get()),
-                "last_dir": self.last_dir,
-            }
-            with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-                json.dump(data, f, ensure_ascii=False, indent=2)
-        except OSError:
-            pass
+        data = {
+            "codec": self.codec_selector.get(),
+            "crf": int(self.slider_quality.get()),
+            "force_720p": bool(self.check_720p.get()),
+            "last_dir": self.last_dir,
+        }
+        save_config(data, CONFIG_PATH)
 
     def apply_config(self):
         """Áp các giá trị đã lưu lên widget khi mở app."""
@@ -371,24 +406,12 @@ class VideoCompressorApp(ctk.CTk):
 
     @staticmethod
     def format_eta(seconds):
-        """Định dạng số giây còn lại thành mm:ss (hoặc h:mm:ss)."""
-        seconds = int(max(0, seconds))
-        h, rem = divmod(seconds, 3600)
-        m, s = divmod(rem, 60)
-        if h > 0:
-            return f"{h}:{m:02d}:{s:02d}"
-        return f"{m:02d}:{s:02d}"
+        """Định dạng số giây còn lại (uỷ thác cho hàm module)."""
+        return format_eta(seconds)
 
     def make_output_path(self, input_path):
-        """Tạo đường dẫn đầu ra, tránh ghi đè file đã tồn tại."""
-        file_dir, file_name = os.path.split(input_path)
-        name, ext = os.path.splitext(file_name)
-        candidate = os.path.join(file_dir, f"{name}_da_nen{ext}")
-        counter = 1
-        while os.path.exists(candidate):
-            candidate = os.path.join(file_dir, f"{name}_da_nen ({counter}){ext}")
-            counter += 1
-        return candidate
+        """Tạo đường dẫn đầu ra, tránh ghi đè (uỷ thác cho hàm module)."""
+        return make_output_path(input_path)
 
     def update_progress(self, overall_fraction, label_prefix):
         """Cập nhật thanh tiến trình tổng + nhãn % kèm ETA, an toàn từ luồng chính."""
