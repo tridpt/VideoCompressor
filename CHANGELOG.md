@@ -1,0 +1,37 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+- Technical documentation (`DOCS.md`) covering architecture and internals.
+- MIT `LICENSE`, `CONTRIBUTING.md`, and this changelog.
+- GitHub Actions CI running the test suite on Python 3.10–3.12.
+- Unit tests for pure-logic functions (`test_logic.py`).
+- "Bỏ chọn" button to clear the selected file list without deleting files.
+- Total size-savings summary shown after a batch finishes.
+- Config persistence: remembers codec, CRF, 720p option, and last-used folder.
+- Scrollable file list showing per-file status (waiting / compressing / done / failed / skipped).
+- Batch compression of multiple files in one run.
+- Codec choice between H.265 (`libx265`) and H.264 (`libx264`).
+- Estimated time remaining (ETA) next to the progress percentage.
+- Cancel button to stop a running compression and clean up partial output.
+- Input validation via `ffprobe` before compressing.
+- Real-time progress percentage parsed from FFmpeg's `-progress` output.
+- Overwrite-safe output naming (`_da_nen`, `_da_nen (1)`, …).
+- Full FFmpeg error logging to `video_compressor_error.log`.
+- Cross-platform "open output folder" on Windows, macOS, and Linux.
+
+### Fixed
+- Fixed an stderr pipe deadlock that froze compression progress when encoding
+  with `libx265`/`libx264` (stderr is now drained on a separate thread).
+
+## [0.1.0]
+
+### Added
+- Initial release: single-file GUI video compressor using FFmpeg with H.265,
+  AAC audio, adjustable CRF, and an optional 720p downscale.
