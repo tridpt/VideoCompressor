@@ -58,6 +58,17 @@ def format_eta(seconds):
     return f"{m:02d}:{s:02d}"
 
 
+def format_savings(in_bytes, out_bytes):
+    """Tạo chuỗi tóm tắt tổng dung lượng trước/sau và % tiết kiệm.
+    Trả về chuỗi rỗng nếu dung lượng gốc không hợp lệ."""
+    if in_bytes <= 0:
+        return ""
+    in_mb = in_bytes / (1024 * 1024)
+    out_mb = out_bytes / (1024 * 1024)
+    saved_pct = (1 - out_bytes / in_bytes) * 100
+    return f"Tổng: {in_mb:.1f}MB ➡️ {out_mb:.1f}MB (tiết kiệm {saved_pct:.0f}%)"
+
+
 def load_config(path=CONFIG_PATH):
     """Đọc config.json. Trả về dict rỗng nếu không có/đọc lỗi."""
     try:
@@ -156,7 +167,13 @@ class VideoCompressorApp(ctk.CTk):
         self.lbl_file_path.pack(side="left", padx=10, pady=10)
 
         self.btn_select = ctk.CTkButton(self.frame_file, text="Chọn Video", command=self.select_files, width=110)
-        self.btn_select.pack(side="right", padx=10, pady=10)
+        self.btn_select.pack(side="right", padx=(5, 10), pady=10)
+
+        self.btn_clear = ctk.CTkButton(
+            self.frame_file, text="Xóa danh sách", command=self.clear_files, width=110,
+            fg_color="#5a5a5a", hover_color="#454545", state="disabled"
+        )
+        self.btn_clear.pack(side="right", padx=(10, 0), pady=10)
 
         # Danh sách file (cuộn được) hiển thị trạng thái từng video
         self.frame_list = ctk.CTkScrollableFrame(self, height=130, label_text="Danh sách video")
@@ -287,9 +304,23 @@ class VideoCompressorApp(ctk.CTk):
             else:
                 self.lbl_file_path.configure(text=f"Đã chọn {len(self.input_files)} video")
             self.rebuild_file_list()
+            self.btn_clear.configure(state="normal")
             self.lbl_status.configure(text="")
             self.progress_bar.stop()
             self.progress_bar.set(0)
+
+    def clear_files(self):
+        """Xóa toàn bộ danh sách file đã chọn (không xóa file trên ổ đĩa)."""
+        self.input_files = []
+        self.output_file = ""
+        for child in self.frame_list.winfo_children():
+            child.destroy()
+        self.row_widgets = {}
+        self.lbl_file_path.configure(text="Chưa chọn video nào...")
+        self.btn_clear.configure(state="disabled")
+        self.lbl_status.configure(text="")
+        self.progress_bar.stop()
+        self.progress_bar.set(0)
 
     # ---------- Kiểm tra file ----------
     def validate_input_file(self, path):
@@ -434,6 +465,8 @@ class VideoCompressorApp(ctk.CTk):
     def run_batch(self, files, crf_value, vcodec, force_720p):
         total = len(files)
         success_count = 0
+        total_in_bytes = 0   # tổng dung lượng gốc của các file nén thành công
+        total_out_bytes = 0  # tổng dung lượng sau khi nén
         try:
             for index, input_path in enumerate(files):
                 if self.is_cancelled:
@@ -459,6 +492,12 @@ class VideoCompressorApp(ctk.CTk):
                     break
                 if ok:
                     success_count += 1
+                    # Cộng dồn dung lượng để báo cáo tổng tiết kiệm
+                    try:
+                        total_in_bytes += os.path.getsize(input_path)
+                        total_out_bytes += os.path.getsize(self.output_file)
+                    except OSError:
+                        pass
                     self.after(0, self.set_file_status, input_path, "xong")
                 else:
                     self.after(0, self.set_file_status, input_path, "lỗi")
@@ -467,10 +506,11 @@ class VideoCompressorApp(ctk.CTk):
             if self.is_cancelled:
                 self.after(0, self.finish_compression, "⏹ Đã hủy nén video.", "gray")
             elif success_count == total:
-                msg = f"✅ XONG! Đã nén {success_count}/{total} video."
+                msg = f"✅ XONG! Đã nén {success_count}/{total} video. {self.format_savings(total_in_bytes, total_out_bytes)}"
                 self.after(0, self.finish_compression, msg, "green")
             elif success_count > 0:
-                msg = f"⚠ Hoàn tất: {success_count}/{total} video thành công, phần còn lại bị lỗi (xem log)."
+                msg = (f"⚠ Hoàn tất: {success_count}/{total} video thành công, phần còn lại bị lỗi (xem log). "
+                       f"{self.format_savings(total_in_bytes, total_out_bytes)}")
                 self.after(0, self.finish_compression, msg, "orange")
             else:
                 self.after(0, self.finish_compression, "❌ Không nén được video nào (xem log).", "red")
@@ -479,6 +519,11 @@ class VideoCompressorApp(ctk.CTk):
             self.after(0, self.finish_compression, f"❌ Lỗi do hệ thống: {str(e)}", "red")
         finally:
             self.process = None
+
+    @staticmethod
+    def format_savings(in_bytes, out_bytes):
+        """Tóm tắt tổng dung lượng tiết kiệm (uỷ thác cho hàm module)."""
+        return format_savings(in_bytes, out_bytes)
 
     def compress_one(self, input_path, output_path, crf_value, vcodec, force_720p, index, total, prefix):
         """Nén một file. Trả về True nếu thành công."""

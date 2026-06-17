@@ -105,3 +105,31 @@ def test_save_config_preserves_unicode(tmp_path):
     # ensure_ascii=False nên tiếng Việt được giữ nguyên, không bị escape \u
     assert "nén sâu" in raw
     assert json.loads(raw) == data
+
+
+# ---------- format_savings ----------
+def test_format_savings_basic():
+    # 100MB -> 25MB = tiết kiệm 75%
+    mb = 1024 * 1024
+    result = main.format_savings(100 * mb, 25 * mb)
+    assert "100.0MB" in result
+    assert "25.0MB" in result
+    assert "75%" in result
+
+
+def test_format_savings_zero_input_returns_empty():
+    assert main.format_savings(0, 0) == ""
+    assert main.format_savings(-5, 10) == ""
+
+
+def test_format_savings_no_reduction():
+    mb = 1024 * 1024
+    result = main.format_savings(50 * mb, 50 * mb)
+    assert "0%" in result
+
+
+def test_format_savings_larger_output():
+    # Trường hợp file sau nén lớn hơn (hiếm) -> % tiết kiệm âm
+    mb = 1024 * 1024
+    result = main.format_savings(10 * mb, 12 * mb)
+    assert "-20%" in result
