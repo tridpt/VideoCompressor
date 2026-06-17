@@ -1,5 +1,7 @@
 # Super Video Compressor
 
+[![Tests](https://github.com/tridpt/VideoCompressor/actions/workflows/tests.yml/badge.svg)](https://github.com/tridpt/VideoCompressor/actions/workflows/tests.yml)
+
 A fast, lightweight, and user-friendly GUI application built with Python and `CustomTkinter`. It utilizes the sheer power of `FFmpeg` to drastically compress your videos, often reducing file sizes by up to 90% without any noticeable loss in visual quality!
 
 ## 🌟 Features
