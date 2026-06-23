@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Drag & drop: drop video files straight onto the list (via `tkinterdnd2`);
+  non-video files are filtered out automatically.
+- Per-file size report: each row now shows original size, then
+  `before ➡️ after (-NN%)` once that file finishes.
+- Custom output folder: pick a separate destination folder for compressed
+  files (or keep the default "next to source"); the choice is remembered.
+- Config now also persists the chosen output folder (the 720p option was
+  already remembered).
+- Pure helpers `format_size`, `is_video_file`, `parse_dropped_files`, and an
+  `output_dir` argument for `make_output_path`, all covered by unit tests.
 - Pure helpers `build_ffmpeg_command` and `parse_progress_fraction`, extracted
   from the compression loop, with unit tests covering codec/CRF/720p options
   and progress parsing.

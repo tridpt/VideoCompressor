@@ -203,3 +203,83 @@ def test_parse_progress_fraction_zero_duration_returns_none():
 
 def test_parse_progress_fraction_invalid_value_returns_none():
     assert main.parse_progress_fraction("out_time_ms=abc", 10.0) is None
+
+
+# ---------- make_output_path với output_dir ----------
+def test_make_output_path_uses_output_dir():
+    path = main.make_output_path(
+        os.path.join("videos", "clip.mp4"),
+        exists=lambda p: False,
+        output_dir=os.path.join("D:", "out"),
+    )
+    assert path == os.path.join("D:", "out", "clip_da_nen.mp4")
+
+
+def test_make_output_path_output_dir_with_collision():
+    out = os.path.join("D:", "out")
+    taken = {os.path.join(out, "clip_da_nen.mp4")}
+    path = main.make_output_path(
+        os.path.join("videos", "clip.mp4"),
+        exists=lambda p: p in taken,
+        output_dir=out,
+    )
+    assert path == os.path.join(out, "clip_da_nen (1).mp4")
+
+
+def test_make_output_path_none_output_dir_falls_back_to_source():
+    path = main.make_output_path(
+        os.path.join("videos", "clip.mp4"),
+        exists=lambda p: False,
+        output_dir=None,
+    )
+    assert path == os.path.join("videos", "clip_da_nen.mp4")
+
+
+# ---------- format_size ----------
+def test_format_size_bytes():
+    assert main.format_size(0) == "0B"
+    assert main.format_size(512) == "512B"
+
+
+def test_format_size_kb_mb_gb():
+    assert main.format_size(1536) == "1.5KB"          # 1.5 * 1024
+    assert main.format_size(5 * 1024 * 1024) == "5.0MB"
+    assert main.format_size(2 * 1024 * 1024 * 1024) == "2.0GB"
+
+
+def test_format_size_invalid():
+    assert main.format_size(None) == "—"
+    assert main.format_size(-100) == "—"
+
+
+# ---------- is_video_file ----------
+def test_is_video_file_accepts_known_extensions():
+    assert main.is_video_file("a.mp4")
+    assert main.is_video_file("B.MKV")        # không phân biệt hoa thường
+    assert main.is_video_file(os.path.join("dir", "clip.mov"))
+
+
+def test_is_video_file_rejects_non_video():
+    assert not main.is_video_file("note.txt")
+    assert not main.is_video_file("image.png")
+    assert not main.is_video_file("noext")
+
+
+# ---------- parse_dropped_files ----------
+def test_parse_dropped_files_simple_splitter():
+    # Dùng splitter giả lập kiểu tk.splitlist
+    raw = "a.mp4 b.txt c.mkv"
+    files = main.parse_dropped_files(raw, splitter=lambda r: r.split())
+    assert files == ["a.mp4", "c.mkv"]
+
+
+def test_parse_dropped_files_handles_braced_paths():
+    # Path có khoảng trắng được bọc trong {} (không truyền splitter)
+    raw = "{C:/My Videos/clip one.mp4} D:/x.mkv {note.txt}"
+    files = main.parse_dropped_files(raw)
+    assert files == ["C:/My Videos/clip one.mp4", "D:/x.mkv"]
+
+
+def test_parse_dropped_files_empty():
+    assert main.parse_dropped_files("", splitter=lambda r: []) == []
+    assert main.parse_dropped_files("readme.md photo.jpg", splitter=lambda r: r.split()) == []

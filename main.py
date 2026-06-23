@@ -8,6 +8,14 @@ import subprocess
 import threading
 import static_ffmpeg
 
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+    _DND_AVAILABLE = True
+except ImportError:
+    DND_FILES = None
+    TkinterDnD = None
+    _DND_AVAILABLE = False
+
 # Tạo biến môi trường chứa ffmpeg (Nếu máy chưa cài ffmpeg thì cái này tự xử lý)
 static_ffmpeg.add_paths()
 
@@ -33,12 +41,19 @@ STATUS_COLORS = {
     "bỏ qua": "#e0a82f",
 }
 
+# Đuôi file video được chấp nhận (dùng cho cả dialog lẫn kéo-thả)
+VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".webm", ".m4v"}
+
 
 # ---------- Hàm logic thuần (tách riêng để dễ test, không phụ thuộc GUI) ----------
-def make_output_path(input_path, exists=os.path.exists):
+def make_output_path(input_path, exists=os.path.exists, output_dir=None):
     """Tạo đường dẫn đầu ra, tránh ghi đè file đã tồn tại.
-    `exists` cho phép thay hàm kiểm tra tồn tại khi test."""
+    `exists` cho phép thay hàm kiểm tra tồn tại khi test.
+    `output_dir` nếu được đặt sẽ là thư mục lưu kết quả; mặc định lưu cạnh
+    file gốc."""
     file_dir, file_name = os.path.split(input_path)
+    if output_dir:
+        file_dir = output_dir
     name, ext = os.path.splitext(file_name)
     candidate = os.path.join(file_dir, f"{name}_da_nen{ext}")
     counter = 1
@@ -46,6 +61,62 @@ def make_output_path(input_path, exists=os.path.exists):
         candidate = os.path.join(file_dir, f"{name}_da_nen ({counter}){ext}")
         counter += 1
     return candidate
+
+
+def format_size(num_bytes):
+    """Định dạng số byte sang chuỗi dễ đọc (KB/MB/GB)."""
+    if num_bytes is None or num_bytes < 0:
+        return "—"
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if size < 1024 or unit == "TB":
+            if unit == "B":
+                return f"{int(size)}{unit}"
+            return f"{size:.1f}{unit}"
+        size /= 1024
+
+
+def is_video_file(path):
+    """True nếu phần mở rộng nằm trong danh sách video hỗ trợ."""
+    return os.path.splitext(path)[1].lower() in VIDEO_EXTENSIONS
+
+
+def parse_dropped_files(raw, splitter=None):
+    """Tách chuỗi dữ liệu kéo-thả thành danh sách đường dẫn video hợp lệ.
+
+    `raw` là chuỗi do tkinterdnd2 cung cấp (các path ngăn cách bởi khoảng trắng,
+    path chứa khoảng trắng được bọc trong {}). `splitter` cho phép thay hàm tách
+    (mặc định tự xử lý cú pháp {} khi không có Tk)."""
+    if splitter is not None:
+        items = splitter(raw)
+    else:
+        items = _split_brace_list(raw)
+    return [p for p in items if is_video_file(p)]
+
+
+def _split_brace_list(raw):
+    """Tách chuỗi kiểu Tcl list ('{a b} c') thành các phần tử, hỗ trợ {}."""
+    items = []
+    token = ""
+    depth = 0
+    for ch in raw:
+        if ch == "{":
+            depth += 1
+            if depth == 1:
+                continue
+        if ch == "}":
+            depth -= 1
+            if depth == 0:
+                continue
+        if ch == " " and depth == 0:
+            if token:
+                items.append(token)
+                token = ""
+            continue
+        token += ch
+    if token:
+        items.append(token)
+    return items
 
 
 def format_eta(seconds):
@@ -132,14 +203,24 @@ class VideoCompressorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
 
+        # Bật hỗ trợ kéo-thả file (nếu tkinterdnd2 có sẵn). CTk kế thừa tk.Tk
+        # nên ta nạp engine TkDnD trực tiếp lên instance.
+        self.dnd_enabled = False
+        if _DND_AVAILABLE:
+            try:
+                self.TkdndVersion = TkinterDnD._require(self)
+                self.dnd_enabled = True
+            except Exception:
+                self.dnd_enabled = False
+
         self.title("Super Video Compressor (Free & Lossless Quality)")
-        self.geometry("640x860")
-        self.minsize(640, 860)
+        self.geometry("640x900")
+        self.minsize(640, 900)
 
         # Danh sách file đầu vào (hỗ trợ nén hàng loạt)
         self.input_files = []
         self.output_file = ""   # file đầu ra đang xử lý
-        self.row_widgets = {}   # input_path -> {"frame":, "status":} để cập nhật trạng thái
+        self.row_widgets = {}   # input_path -> {"frame":, "status":, "size":}
 
         # Trạng thái tiến trình nén
         self.process = None        # tham chiếu tới tiến trình ffmpeg đang chạy
@@ -149,6 +230,10 @@ class VideoCompressorApp(ctk.CTk):
         # Đọc cấu hình đã lưu (nếu có)
         self.config = self.load_config()
         self.last_dir = self.config.get("last_dir", "")
+        # Thư mục lưu kết quả riêng ("" = lưu cạnh file gốc như mặc định)
+        self.output_dir = self.config.get("output_dir", "")
+        if self.output_dir and not os.path.isdir(self.output_dir):
+            self.output_dir = ""
 
         self.build_ui()
         self.apply_config()
@@ -168,6 +253,7 @@ class VideoCompressorApp(ctk.CTk):
             "crf": int(self.slider_quality.get()),
             "force_720p": bool(self.check_720p.get()),
             "last_dir": self.last_dir,
+            "output_dir": self.output_dir,
         }
         save_config(data, CONFIG_PATH)
 
@@ -184,6 +270,9 @@ class VideoCompressorApp(ctk.CTk):
 
         if self.config.get("force_720p"):
             self.check_720p.select()
+
+        # Hiển thị thư mục output đã nhớ (nếu có)
+        self.update_output_dir_label()
 
     def on_close(self):
         """Lưu cấu hình rồi đóng app."""
@@ -215,8 +304,10 @@ class VideoCompressorApp(ctk.CTk):
         self.btn_clear.pack(side="right", padx=(10, 0), pady=10)
 
         # Danh sách file (cuộn được) hiển thị trạng thái từng video
-        self.frame_list = ctk.CTkScrollableFrame(self, height=130, label_text="Danh sách video")
+        list_label = "Danh sách video — kéo & thả file vào đây" if self.dnd_enabled else "Danh sách video"
+        self.frame_list = ctk.CTkScrollableFrame(self, height=130, label_text=list_label)
         self.frame_list.pack(pady=8, padx=20, fill="x")
+        self._register_drop_target()
 
         # Chọn codec
         self.frame_codec = ctk.CTkFrame(self)
@@ -251,6 +342,29 @@ class VideoCompressorApp(ctk.CTk):
 
         self.check_720p = ctk.CTkCheckBox(self.frame_options, text="Ép video về chất lượng HD 720p (Đảm bảo dung lượng sẽ giảm cực sâu)")
         self.check_720p.pack(side="left", padx=10, pady=10)
+
+        # Chọn thư mục lưu kết quả (mặc định: cạnh file gốc)
+        self.frame_output = ctk.CTkFrame(self)
+        self.frame_output.pack(pady=8, padx=20, fill="x")
+
+        self.lbl_output_caption = ctk.CTkLabel(self.frame_output, text="Lưu vào:")
+        self.lbl_output_caption.pack(side="left", padx=10, pady=10)
+
+        self.lbl_output_dir = ctk.CTkLabel(
+            self.frame_output, text="Cạnh file gốc (mặc định)", anchor="w", text_color="gray"
+        )
+        self.lbl_output_dir.pack(side="left", padx=4, pady=10, expand=True, fill="x")
+
+        self.btn_reset_output = ctk.CTkButton(
+            self.frame_output, text="Mặc định", command=self.reset_output_dir, width=90,
+            fg_color="#5a5a5a", hover_color="#454545"
+        )
+        self.btn_reset_output.pack(side="right", padx=(5, 10), pady=10)
+
+        self.btn_choose_output = ctk.CTkButton(
+            self.frame_output, text="Chọn thư mục", command=self.choose_output_dir, width=110
+        )
+        self.btn_choose_output.pack(side="right", padx=(5, 0), pady=10)
 
         # Progress bar (kèm nhãn cho dễ thấy)
         self.lbl_progress = ctk.CTkLabel(self, text="Tiến trình nén:", anchor="w")
@@ -294,6 +408,49 @@ class VideoCompressorApp(ctk.CTk):
             txt = f"{value} (Khuyên dùng)"
         self.lbl_crf_val.configure(text=txt)
 
+    # ---------- Kéo & thả ----------
+    def _register_drop_target(self):
+        """Đăng ký vùng danh sách nhận file kéo-thả (nếu bật được DnD)."""
+        if not self.dnd_enabled:
+            return
+        try:
+            self.frame_list.drop_target_register(DND_FILES)
+            self.frame_list.dnd_bind("<<Drop>>", self.on_drop)
+        except Exception:
+            self.dnd_enabled = False
+
+    def on_drop(self, event):
+        """Xử lý sự kiện thả file: lọc lấy video hợp lệ rồi nạp vào danh sách."""
+        files = parse_dropped_files(event.data, splitter=self.tk.splitlist)
+        if not files:
+            self.lbl_status.configure(
+                text="Không tìm thấy file video hợp lệ trong nội dung vừa thả.",
+                text_color="orange"
+            )
+            return
+        self._set_input_files(files)
+
+    # ---------- Thư mục output ----------
+    def update_output_dir_label(self):
+        """Cập nhật nhãn hiển thị thư mục lưu kết quả."""
+        if self.output_dir:
+            self.lbl_output_dir.configure(text=self.output_dir, text_color="white")
+        else:
+            self.lbl_output_dir.configure(text="Cạnh file gốc (mặc định)", text_color="gray")
+
+    def choose_output_dir(self):
+        """Cho người dùng chọn thư mục lưu kết quả riêng."""
+        initial = self.output_dir if self.output_dir and os.path.isdir(self.output_dir) else None
+        chosen = filedialog.askdirectory(title="Chọn thư mục lưu video đã nén", initialdir=initial)
+        if chosen:
+            self.output_dir = chosen
+            self.update_output_dir_label()
+
+    def reset_output_dir(self):
+        """Quay về mặc định: lưu cạnh file gốc."""
+        self.output_dir = ""
+        self.update_output_dir_label()
+
     # ---------- Danh sách file ----------
     def rebuild_file_list(self):
         """Vẽ lại danh sách file với trạng thái ban đầu là 'chờ'."""
@@ -309,10 +466,18 @@ class VideoCompressorApp(ctk.CTk):
             lbl_name = ctk.CTkLabel(row, text=os.path.basename(path), anchor="w")
             lbl_name.pack(side="left", padx=8, pady=4, expand=True, fill="x")
 
+            # Dung lượng gốc của file (sẽ đổi thành "gốc ➡️ sau" khi nén xong)
+            try:
+                orig = format_size(os.path.getsize(path))
+            except OSError:
+                orig = "—"
+            lbl_size = ctk.CTkLabel(row, text=orig, width=150, anchor="e", text_color="gray")
+            lbl_size.pack(side="right", padx=4, pady=4)
+
             lbl_status = ctk.CTkLabel(row, text="● chờ", width=90, anchor="e", text_color=STATUS_COLORS["chờ"])
             lbl_status.pack(side="right", padx=8, pady=4)
 
-            self.row_widgets[path] = {"frame": row, "status": lbl_status}
+            self.row_widgets[path] = {"frame": row, "status": lbl_status, "size": lbl_size}
 
     def set_file_status(self, path, status):
         """Cập nhật nhãn trạng thái của một file (gọi an toàn từ luồng chính)."""
@@ -321,6 +486,16 @@ class VideoCompressorApp(ctk.CTk):
             widget["status"].configure(
                 text=f"● {status}",
                 text_color=STATUS_COLORS.get(status, "gray")
+            )
+
+    def set_file_result(self, path, in_bytes, out_bytes):
+        """Hiện dung lượng trước/sau cho một file sau khi nén xong."""
+        widget = self.row_widgets.get(path)
+        if widget:
+            saved = (1 - out_bytes / in_bytes) * 100 if in_bytes > 0 else 0
+            widget["size"].configure(
+                text=f"{format_size(in_bytes)} ➡️ {format_size(out_bytes)} (-{saved:.0f}%)",
+                text_color="#3ba55d"
             )
 
     # ---------- Chọn file ----------
@@ -336,17 +511,21 @@ class VideoCompressorApp(ctk.CTk):
             initialdir=initial
         )
         if filenames:
-            self.input_files = list(filenames)
-            self.last_dir = os.path.dirname(self.input_files[0])
-            if len(self.input_files) == 1:
-                self.lbl_file_path.configure(text=os.path.basename(self.input_files[0]))
-            else:
-                self.lbl_file_path.configure(text=f"Đã chọn {len(self.input_files)} video")
-            self.rebuild_file_list()
-            self.btn_clear.configure(state="normal")
-            self.lbl_status.configure(text="")
-            self.progress_bar.stop()
-            self.progress_bar.set(0)
+            self._set_input_files(list(filenames))
+
+    def _set_input_files(self, files):
+        """Nạp danh sách file mới vào UI (dùng chung cho dialog và kéo-thả)."""
+        self.input_files = list(files)
+        self.last_dir = os.path.dirname(self.input_files[0])
+        if len(self.input_files) == 1:
+            self.lbl_file_path.configure(text=os.path.basename(self.input_files[0]))
+        else:
+            self.lbl_file_path.configure(text=f"Đã chọn {len(self.input_files)} video")
+        self.rebuild_file_list()
+        self.btn_clear.configure(state="normal")
+        self.lbl_status.configure(text="")
+        self.progress_bar.stop()
+        self.progress_bar.set(0)
 
     def clear_files(self):
         """Xóa toàn bộ danh sách file đã chọn (không xóa file trên ổ đĩa)."""
@@ -484,8 +663,10 @@ class VideoCompressorApp(ctk.CTk):
         return format_eta(seconds)
 
     def make_output_path(self, input_path):
-        """Tạo đường dẫn đầu ra, tránh ghi đè (uỷ thác cho hàm module)."""
-        return make_output_path(input_path)
+        """Tạo đường dẫn đầu ra, tránh ghi đè (uỷ thác cho hàm module).
+        Dùng thư mục output riêng nếu người dùng đã chọn."""
+        out_dir = self.output_dir if self.output_dir and os.path.isdir(self.output_dir) else None
+        return make_output_path(input_path, output_dir=out_dir)
 
     def update_progress(self, overall_fraction, label_prefix):
         """Cập nhật thanh tiến trình tổng + nhãn % kèm ETA, an toàn từ luồng chính."""
@@ -537,8 +718,11 @@ class VideoCompressorApp(ctk.CTk):
                     success_count += 1
                     # Cộng dồn dung lượng để báo cáo tổng tiết kiệm
                     try:
-                        total_in_bytes += os.path.getsize(input_path)
-                        total_out_bytes += os.path.getsize(self.output_file)
+                        in_size = os.path.getsize(input_path)
+                        out_size = os.path.getsize(self.output_file)
+                        total_in_bytes += in_size
+                        total_out_bytes += out_size
+                        self.after(0, self.set_file_result, input_path, in_size, out_size)
                     except OSError:
                         pass
                     self.after(0, self.set_file_status, input_path, "xong")
@@ -634,7 +818,9 @@ class VideoCompressorApp(ctk.CTk):
 
         # Mở thư mục chứa file khi có ít nhất 1 file thành công
         if "XONG" in status_text or "Hoàn tất" in status_text:
-            if self.input_files:
+            if self.output_dir and os.path.isdir(self.output_dir):
+                self.open_folder(self.output_dir)
+            elif self.input_files:
                 self.open_folder(os.path.dirname(self.input_files[0]))
 
 
