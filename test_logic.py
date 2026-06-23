@@ -133,3 +133,73 @@ def test_format_savings_larger_output():
     mb = 1024 * 1024
     result = main.format_savings(10 * mb, 12 * mb)
     assert "-20%" in result
+
+
+# ---------- build_ffmpeg_command ----------
+def test_build_ffmpeg_command_basic():
+    cmd = main.build_ffmpeg_command("in.mp4", "out.mp4", 28, "libx265", False)
+    # Các tham số cốt lõi phải có mặt và đúng thứ tự đầu vào -> đầu ra
+    assert cmd[0] == "ffmpeg"
+    assert "-i" in cmd and cmd[cmd.index("-i") + 1] == "in.mp4"
+    assert cmd[cmd.index("-vcodec") + 1] == "libx265"
+    assert cmd[cmd.index("-crf") + 1] == "28"
+    assert cmd[cmd.index("-acodec") + 1] == "aac"
+    # Đường dẫn đầu ra luôn là tham số cuối
+    assert cmd[-1] == "out.mp4"
+
+
+def test_build_ffmpeg_command_crf_is_string():
+    cmd = main.build_ffmpeg_command("in.mp4", "out.mp4", 35, "libx264", False)
+    # CRF phải được ép về chuỗi cho subprocess
+    assert cmd[cmd.index("-crf") + 1] == "35"
+    assert cmd[cmd.index("-vcodec") + 1] == "libx264"
+
+
+def test_build_ffmpeg_command_without_720p_has_no_scale():
+    cmd = main.build_ffmpeg_command("in.mp4", "out.mp4", 28, "libx265", False)
+    assert "-vf" not in cmd
+    assert "scale=-2:720" not in cmd
+
+
+def test_build_ffmpeg_command_with_720p_adds_scale_filter():
+    cmd = main.build_ffmpeg_command("in.mp4", "out.mp4", 28, "libx265", True)
+    assert "-vf" in cmd
+    assert cmd[cmd.index("-vf") + 1] == "scale=-2:720"
+    # Bộ lọc 720p phải đứng trước phần audio/output
+    assert cmd.index("-vf") < cmd.index("-acodec")
+
+
+def test_build_ffmpeg_command_enables_progress_output():
+    cmd = main.build_ffmpeg_command("in.mp4", "out.mp4", 28, "libx265", False)
+    # Cần -progress pipe:1 để đọc tiến trình realtime
+    assert cmd[cmd.index("-progress") + 1] == "pipe:1"
+    assert "-nostats" in cmd
+
+
+# ---------- parse_progress_fraction ----------
+def test_parse_progress_fraction_midway():
+    # 5 giây trên video 10 giây -> 0.5
+    assert main.parse_progress_fraction("out_time_ms=5000000", 10.0) == 0.5
+
+
+def test_parse_progress_fraction_strips_whitespace():
+    assert main.parse_progress_fraction("  out_time_ms=2000000\n", 10.0) == 0.2
+
+
+def test_parse_progress_fraction_clamped_to_one():
+    # Vượt quá độ dài (FFmpeg đôi khi báo dư) -> kẹp về 1.0
+    assert main.parse_progress_fraction("out_time_ms=12000000", 10.0) == 1.0
+
+
+def test_parse_progress_fraction_non_progress_line_returns_none():
+    assert main.parse_progress_fraction("frame=123", 10.0) is None
+    assert main.parse_progress_fraction("bitrate=N/A", 10.0) is None
+
+
+def test_parse_progress_fraction_zero_duration_returns_none():
+    # Không biết tổng độ dài -> không tính được %
+    assert main.parse_progress_fraction("out_time_ms=5000000", 0) is None
+
+
+def test_parse_progress_fraction_invalid_value_returns_none():
+    assert main.parse_progress_fraction("out_time_ms=abc", 10.0) is None

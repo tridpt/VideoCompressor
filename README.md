@@ -34,7 +34,7 @@ A fast, lightweight, and user-friendly GUI application built with Python and `Cu
 
 ## 🚀 Installation & Requirements
 
-Ensure you have **Python 3.8+** installed. 
+Ensure you have **Python 3.10+** installed. 
 
 1. **Clone the repository:**
    ```bash

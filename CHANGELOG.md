@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Pure helpers `build_ffmpeg_command` and `parse_progress_fraction`, extracted
+  from the compression loop, with unit tests covering codec/CRF/720p options
+  and progress parsing.
 - Technical documentation (`DOCS.md`) covering architecture and internals.
 - MIT `LICENSE`, `CONTRIBUTING.md`, and this changelog.
 - GitHub Actions CI running the test suite on Python 3.10–3.12.
@@ -27,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Cross-platform "open output folder" on Windows, macOS, and Linux.
 
 ### Fixed
+- Added a 30s `timeout` to the `ffprobe` validation and duration calls so a
+  hanging/corrupt file can no longer freeze the app.
+- Aligned the documented Python version (README now states 3.10+, matching the
+  badge and CI matrix).
 - Fixed an stderr pipe deadlock that froze compression progress when encoding
   with `libx265`/`libx264` (stderr is now drained on a separate thread).
 

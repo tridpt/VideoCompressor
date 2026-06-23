@@ -89,6 +89,45 @@ def save_config(data, path=CONFIG_PATH):
         return False
 
 
+def build_ffmpeg_command(input_path, output_path, crf_value, vcodec, force_720p):
+    """Dựng danh sách tham số dòng lệnh FFmpeg (hàm thuần, dễ test).
+
+    Tách riêng khỏi GUI để có thể kiểm tra codec, CRF, bộ lọc 720p và
+    đường dẫn đầu ra được đặt đúng mà không cần chạy FFmpeg thật."""
+    command = [
+        'ffmpeg', '-y',
+        '-i', input_path,
+        '-vcodec', vcodec,
+        '-crf', str(crf_value),
+        '-preset', 'fast',
+    ]
+    if force_720p:
+        command.extend(['-vf', 'scale=-2:720'])
+    command.extend([
+        '-acodec', 'aac',
+        '-progress', 'pipe:1',
+        '-nostats',
+        output_path,
+    ])
+    return command
+
+
+def parse_progress_fraction(line, total_duration):
+    """Đọc một dòng `-progress` của FFmpeg, trả về phần trăm (0..1) đã nén.
+
+    Trả về None nếu dòng không phải `out_time_ms=` hợp lệ hoặc không tính được
+    (ví dụ total_duration <= 0)."""
+    line = line.strip()
+    if not line.startswith('out_time_ms=') or total_duration <= 0:
+        return None
+    try:
+        out_time_ms = int(line.split('=', 1)[1])
+    except ValueError:
+        return None
+    fraction = (out_time_ms / 1_000_000) / total_duration
+    return max(0.0, min(fraction, 1.0))
+
+
 class VideoCompressorApp(ctk.CTk):
     def __init__(self):
         super().__init__()
@@ -340,12 +379,15 @@ class VideoCompressorApp(ctk.CTk):
                     path
                 ],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=30,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
             if 'video' not in result.stdout.decode('utf-8', errors='ignore'):
                 return False, "Không chứa luồng video hợp lệ (có thể hỏng/sai định dạng)."
         except FileNotFoundError:
             return False, "Không tìm thấy ffprobe để kiểm tra file."
+        except subprocess.TimeoutExpired:
+            return False, "Quá thời gian kiểm tra file (ffprobe không phản hồi)."
         return True, ""
 
     # ---------- Bắt đầu nén ----------
@@ -429,10 +471,11 @@ class VideoCompressorApp(ctk.CTk):
                     path
                 ],
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                timeout=30,
                 creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0
             )
             return float(result.stdout.decode('utf-8').strip())
-        except (ValueError, FileNotFoundError):
+        except (ValueError, FileNotFoundError, subprocess.TimeoutExpired):
             return 0.0
 
     @staticmethod
@@ -529,21 +572,7 @@ class VideoCompressorApp(ctk.CTk):
         """Nén một file. Trả về True nếu thành công."""
         total_duration = self.get_video_duration(input_path)
 
-        command = [
-            'ffmpeg', '-y',
-            '-i', input_path,
-            '-vcodec', vcodec,
-            '-crf', str(crf_value),
-            '-preset', 'fast',
-        ]
-        if force_720p:
-            command.extend(['-vf', 'scale=-2:720'])
-        command.extend([
-            '-acodec', 'aac',
-            '-progress', 'pipe:1',
-            '-nostats',
-            output_path
-        ])
+        command = build_ffmpeg_command(input_path, output_path, crf_value, vcodec, force_720p)
 
         process = subprocess.Popen(
             command,
@@ -564,17 +593,11 @@ class VideoCompressorApp(ctk.CTk):
         stderr_thread.start()
 
         for line in process.stdout:
-            line = line.strip()
-            if line.startswith('out_time_ms=') and total_duration > 0:
-                try:
-                    out_time_ms = int(line.split('=', 1)[1])
-                    file_fraction = (out_time_ms / 1_000_000) / total_duration
-                    file_fraction = max(0.0, min(file_fraction, 1.0))
-                    # Tiến trình tổng = số file xong + phần file hiện tại, chia tổng số file
-                    overall = (index + file_fraction) / total
-                    self.after(0, self.update_progress, overall, f"{prefix} Đang nén...")
-                except ValueError:
-                    pass
+            file_fraction = parse_progress_fraction(line, total_duration)
+            if file_fraction is not None:
+                # Tiến trình tổng = số file xong + phần file hiện tại, chia tổng số file
+                overall = (index + file_fraction) / total
+                self.after(0, self.update_progress, overall, f"{prefix} Đang nén...")
 
         process.wait()
         stderr_thread.join(timeout=5)
