@@ -25,10 +25,16 @@ static_ffmpeg.add_paths()
 ctk.set_appearance_mode("Dark")  # Giao diện Dark mode xịn xò
 ctk.set_default_color_theme("blue")  # Màu chủ đạo là xanh dương
 
-# Bản đồ codec: tên hiển thị -> tham số FFmpeg
+# Bản đồ codec CPU: tên hiển thị -> tham số FFmpeg
 CODECS = {
     "H.265 (nén sâu)": "libx265",
     "H.264 (tương thích rộng)": "libx264",
+}
+
+# Codec tăng tốc GPU NVIDIA (chỉ thêm vào lựa chọn nếu máy hỗ trợ)
+GPU_CODECS = {
+    "H.265 GPU (NVIDIA)": "hevc_nvenc",
+    "H.264 GPU (NVIDIA)": "h264_nvenc",
 }
 
 # Nơi lưu cấu hình (cạnh file script để dễ tìm)
@@ -173,27 +179,96 @@ def save_config(data, path=CONFIG_PATH):
 
 
 def build_ffmpeg_command(input_path, output_path, crf_value, vcodec, force_720p, preset="fast"):
-    """Dựng danh sách tham số dòng lệnh FFmpeg cho chế độ CRF một lượt
+    """Dựng danh sách tham số dòng lệnh FFmpeg cho chế độ chất lượng một lượt
     (hàm thuần, dễ test).
 
-    Tách riêng khỏi GUI để có thể kiểm tra codec, CRF, preset, bộ lọc 720p
-    và đường dẫn đầu ra được đặt đúng mà không cần chạy FFmpeg thật."""
-    command = [
-        'ffmpeg', '-y',
-        '-i', input_path,
-        '-vcodec', vcodec,
-        '-crf', str(crf_value),
-        '-preset', preset,
-    ]
+    Encoder CPU (libx264/265) dùng `-crf`; encoder phần cứng NVENC dùng
+    `-cq` (constant quality) và preset dạng p1..p7."""
+    command = ['ffmpeg', '-y', '-i', input_path, '-vcodec', vcodec]
+    if is_hardware_encoder(vcodec):
+        command += ['-rc', 'vbr', '-cq', str(crf_value), '-preset', nvenc_preset(preset)]
+    else:
+        command += ['-crf', str(crf_value), '-preset', preset]
     if force_720p:
-        command.extend(['-vf', 'scale=-2:720'])
-    command.extend([
-        '-acodec', 'aac',
-        '-progress', 'pipe:1',
-        '-nostats',
-        output_path,
-    ])
+        command += ['-vf', 'scale=-2:720']
+    command += ['-acodec', 'aac', '-progress', 'pipe:1', '-nostats', output_path]
     return command
+
+
+def is_hardware_encoder(vcodec):
+    """True nếu là encoder tăng tốc phần cứng (NVENC/QSV/AMF)."""
+    return vcodec.endswith(("_nvenc", "_qsv", "_amf"))
+
+
+# Ánh xạ preset kiểu x264 (nhanh->chậm) sang preset NVENC p1..p7
+_NVENC_PRESET_MAP = {
+    "ultrafast": "p1", "superfast": "p1", "veryfast": "p2", "faster": "p3",
+    "fast": "p4", "medium": "p4", "slow": "p5", "slower": "p6", "veryslow": "p7",
+}
+
+
+def nvenc_preset(cpu_preset):
+    """Đổi preset kiểu x264 sang preset tương đương của NVENC (mặc định p4)."""
+    return _NVENC_PRESET_MAP.get(cpu_preset, "p4")
+
+
+def build_nvenc_abr_command(input_path, output_path, vcodec, bitrate_kbps,
+                            force_720p, preset):
+    """Dựng lệnh NVENC một lượt theo bitrate trung bình (xấp xỉ dung lượng
+    mục tiêu). NVENC không dùng 2-pass kiểu log như CPU nên ta giới hạn
+    maxrate/bufsize để bám sát mục tiêu."""
+    scale = ['-vf', 'scale=-2:720'] if force_720p else []
+    maxrate = int(bitrate_kbps * 1.5)
+    bufsize = bitrate_kbps * 2
+    return [
+        'ffmpeg', '-y', '-i', input_path,
+        '-c:v', vcodec, '-rc', 'vbr',
+        '-b:v', f'{bitrate_kbps}k',
+        '-maxrate', f'{maxrate}k', '-bufsize', f'{bufsize}k',
+        '-preset', nvenc_preset(preset), *scale,
+        '-c:a', 'aac',
+        '-progress', 'pipe:1', '-nostats',
+        output_path,
+    ]
+
+
+def detect_available_encoders(runner=subprocess.run, candidates=("h264_nvenc", "hevc_nvenc")):
+    """Dò các encoder GPU THỰC SỰ dùng được. Encoder có thể được biên dịch
+    sẵn trong FFmpeg nhưng vẫn lỗi lúc chạy nếu thiếu driver/phần cứng
+    (vd 'Cannot load nvcuda.dll'), nên ta thử encode 1 frame để chắc chắn."""
+    return {enc for enc in candidates if _probe_encoder(enc, runner)}
+
+
+def _probe_encoder(encoder, runner=subprocess.run):
+    """Thử mở encoder bằng cách mã hoá 1 frame ra null. True nếu thành công."""
+    try:
+        result = runner(
+            [
+                'ffmpeg', '-hide_banner',
+                '-f', 'lavfi', '-i', 'nullsrc=s=256x144:d=0.1',
+                '-c:v', encoder, '-frames:v', '1',
+                '-f', 'null', os.devnull,
+            ],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=20,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0,
+        )
+    except Exception:
+        return False
+    return getattr(result, "returncode", 1) == 0
+
+
+def format_size_change(in_bytes, out_bytes):
+    """Mô tả thay đổi dung lượng sau nén. Trả về (text, grew) với grew=True
+    khi file sau nén KHÔNG nhỏ hơn file gốc (cảnh báo)."""
+    before = format_size(in_bytes)
+    after = format_size(out_bytes)
+    if in_bytes <= 0:
+        return f"{before} ➡️ {after}", False
+    if out_bytes >= in_bytes:
+        grew_pct = (out_bytes / in_bytes - 1) * 100
+        return f"⚠ {before} ➡️ {after} (+{grew_pct:.0f}%)", True
+    saved = (1 - out_bytes / in_bytes) * 100
+    return f"{before} ➡️ {after} (-{saved:.0f}%)", False
 
 
 def compute_video_bitrate(target_mb, duration_sec, audio_kbps=128, min_video_kbps=100):
@@ -281,7 +356,15 @@ class VideoCompressorApp(ctk.CTk):
         # Trạng thái tiến trình nén
         self.process = None        # tham chiếu tới tiến trình ffmpeg đang chạy
         self.is_cancelled = False  # cờ đánh dấu người dùng đã bấm Hủy
+        self.is_running = False    # cờ đang nén (khoá thao tác sửa danh sách)
         self.batch_start_time = 0  # mốc thời gian bắt đầu cả lô (để tính ETA)
+
+        # Danh sách codec khả dụng = CPU + GPU (nếu máy hỗ trợ NVENC)
+        self.codecs = dict(CODECS)
+        gpu = detect_available_encoders()
+        for name, enc in GPU_CODECS.items():
+            if enc in gpu:
+                self.codecs[name] = enc
 
         # Đọc cấu hình đã lưu (nếu có)
         self.config = self.load_config()
@@ -319,7 +402,7 @@ class VideoCompressorApp(ctk.CTk):
     def apply_config(self):
         """Áp các giá trị đã lưu lên widget khi mở app."""
         codec = self.config.get("codec")
-        if codec in CODECS:
+        if codec in self.codecs:
             self.codec_selector.set(codec)
 
         crf = self.config.get("crf")
@@ -388,7 +471,7 @@ class VideoCompressorApp(ctk.CTk):
         self.lbl_codec = ctk.CTkLabel(self.frame_codec, text="Codec:")
         self.lbl_codec.pack(side="left", padx=10, pady=10)
 
-        self.codec_selector = ctk.CTkSegmentedButton(self.frame_codec, values=list(CODECS.keys()))
+        self.codec_selector = ctk.CTkSegmentedButton(self.frame_codec, values=list(self.codecs.keys()))
         self.codec_selector.set("H.265 (nén sâu)")  # mặc định nén sâu
         self.codec_selector.pack(side="left", padx=10, pady=10, expand=True, fill="x")
 
@@ -594,6 +677,13 @@ class VideoCompressorApp(ctk.CTk):
             lbl_name = ctk.CTkLabel(row, text=os.path.basename(path), anchor="w")
             lbl_name.pack(side="left", padx=8, pady=4, expand=True, fill="x")
 
+            # Nút xoá file này khỏi danh sách (vô hiệu khi đang nén)
+            btn_remove = ctk.CTkButton(
+                row, text="✕", width=28, fg_color="#5a5a5a", hover_color="#7a3030",
+                command=lambda p=path: self.remove_file(p)
+            )
+            btn_remove.pack(side="right", padx=(0, 6), pady=4)
+
             # Dung lượng gốc của file (sẽ đổi thành "gốc ➡️ sau" khi nén xong)
             try:
                 orig = format_size(os.path.getsize(path))
@@ -607,6 +697,21 @@ class VideoCompressorApp(ctk.CTk):
 
             self.row_widgets[path] = {"frame": row, "status": lbl_status, "size": lbl_size}
 
+    def remove_file(self, path):
+        """Xoá một file khỏi danh sách (không xoá trên ổ đĩa). Bị khoá khi đang nén."""
+        if self.is_running:
+            return
+        if path in self.input_files:
+            self.input_files.remove(path)
+        if not self.input_files:
+            self.clear_files()
+            return
+        if len(self.input_files) == 1:
+            self.lbl_file_path.configure(text=os.path.basename(self.input_files[0]))
+        else:
+            self.lbl_file_path.configure(text=f"Đã chọn {len(self.input_files)} video")
+        self.rebuild_file_list()
+
     def set_file_status(self, path, status):
         """Cập nhật nhãn trạng thái của một file (gọi an toàn từ luồng chính)."""
         widget = self.row_widgets.get(path)
@@ -617,14 +722,12 @@ class VideoCompressorApp(ctk.CTk):
             )
 
     def set_file_result(self, path, in_bytes, out_bytes):
-        """Hiện dung lượng trước/sau cho một file sau khi nén xong."""
+        """Hiện dung lượng trước/sau cho một file sau khi nén xong.
+        Cảnh báo (màu vàng) nếu file sau nén không nhỏ hơn file gốc."""
         widget = self.row_widgets.get(path)
         if widget:
-            saved = (1 - out_bytes / in_bytes) * 100 if in_bytes > 0 else 0
-            widget["size"].configure(
-                text=f"{format_size(in_bytes)} ➡️ {format_size(out_bytes)} (-{saved:.0f}%)",
-                text_color="#3ba55d"
-            )
+            text, grew = format_size_change(in_bytes, out_bytes)
+            widget["size"].configure(text=text, text_color="#e0a82f" if grew else "#3ba55d")
 
     # ---------- Chọn file ----------
     def select_files(self):
@@ -723,6 +826,7 @@ class VideoCompressorApp(ctk.CTk):
 
         # Reset cờ hủy + mốc thời gian cho lô mới
         self.is_cancelled = False
+        self.is_running = True
         self.batch_start_time = time.time()
 
         # Đặt lại trạng thái mọi file về 'chờ'
@@ -742,7 +846,7 @@ class VideoCompressorApp(ctk.CTk):
         opts = {
             "mode": mode,
             "crf": int(self.slider_quality.get()),
-            "vcodec": CODECS.get(self.codec_selector.get(), "libx265"),
+            "vcodec": self.codecs.get(self.codec_selector.get(), "libx265"),
             "force_720p": self.check_720p.get() == 1,
             "preset": self.preset_selector.get(),
             "target_mb": target_mb,
@@ -962,7 +1066,8 @@ class VideoCompressorApp(ctk.CTk):
 
     def _compress_target_size(self, input_path, output_path, total_duration, vcodec,
                               preset, force_720p, target_mb, index, total, prefix):
-        """Nén 2-pass để đạt dung lượng mục tiêu (target_mb)."""
+        """Nén để đạt dung lượng mục tiêu (target_mb).
+        CPU: 2-pass dùng log; GPU/NVENC: một lượt theo bitrate trung bình."""
         bitrate = compute_video_bitrate(target_mb, total_duration)
         if bitrate is None:
             self.write_error_log(
@@ -971,6 +1076,24 @@ class VideoCompressorApp(ctk.CTk):
             )
             return False
 
+        # ----- Encoder GPU: một lượt ABR (NVENC không hỗ trợ 2-pass kiểu log) -----
+        if is_hardware_encoder(vcodec):
+            cmd = build_nvenc_abr_command(
+                input_path, output_path, vcodec, bitrate, force_720p, preset
+            )
+            rc, err = self._run_ffmpeg(
+                cmd, total_duration,
+                lambda f: (index + f) / total, f"{prefix} Đang nén (GPU)..."
+            )
+            if self.is_cancelled:
+                return False
+            if rc == 0:
+                self.after(0, self.update_progress, (index + 1) / total, f"{prefix} Hoàn tất file...")
+                return True
+            self.write_error_log(err)
+            return False
+
+        # ----- Encoder CPU: 2-pass -----
         passlog = os.path.join(tempfile.gettempdir(), f"svc_pass_{os.getpid()}_{index}")
         try:
             cmd1, cmd2 = build_two_pass_commands(
@@ -1028,6 +1151,7 @@ class VideoCompressorApp(ctk.CTk):
         self.lbl_status.configure(text=status_text, text_color=text_color)
 
         self.is_cancelled = False
+        self.is_running = False
         # Khôi phục trạng thái slider/ô nhập theo chế độ hiện tại
         self._apply_mode_state()
 

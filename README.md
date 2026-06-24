@@ -22,6 +22,9 @@ A fast, lightweight, and user-friendly GUI application built with Python and `Cu
 * **Custom Output Folder:** Save compressed files to a folder you choose, or keep the default of saving next to the source. Your choice is remembered.
 * **Remembers Your Choices:** Your codec, CRF, 720p option, output folder, and last-used folder are saved to a local `config.json` and restored next time you open the app, no need to reconfigure.
 * **Codec Choice:** Pick between **H.265 (`libx265`)** for the deepest compression or **H.264 (`libx264`)** for the widest device/player compatibility.
+* **GPU Acceleration (NVIDIA):** If a working NVENC encoder is detected on your machine, extra **H.265/H.264 GPU** options appear for dramatically faster encoding. Availability is verified by a real test-encode at startup, so dead options never show up.
+* **Per-File Remove:** Each row has an **✕** button to drop a single file from the list (disabled while a batch is running) without clearing everything.
+* **Bigger-Output Warning:** If a compressed file ends up the same size or larger than the source (rare, e.g. already-optimized clips), its size label turns amber with a ⚠ and the percentage it grew by.
 * **Speed Preset:** Choose any FFmpeg preset from `ultrafast` to `veryslow` to trade encoding time for compression efficiency (defaults to `fast`).
 * **Two Compression Modes:**
   * **Quality (CRF):** dial in a constant-quality factor with the slider.

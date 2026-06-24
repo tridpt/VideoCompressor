@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- GPU acceleration via NVIDIA NVENC (`h264_nvenc` / `hevc_nvenc`): GPU codec
+  options appear only when a real test-encode succeeds at startup, avoiding
+  dead options on machines without the right driver. NVENC uses `-cq` for
+  quality and single-pass ABR for target-size mode.
+- Per-row **✕** button to remove a single file from the list (disabled during
+  a running batch).
+- Bigger-output warning: a finished file that is not smaller than its source
+  is flagged amber with a ⚠ and the grow percentage.
+- Pure helpers `is_hardware_encoder`, `nvenc_preset`, `build_nvenc_abr_command`,
+  `detect_available_encoders`, and `format_size_change`, all unit-tested.
 - Speed preset selector (`ultrafast` … `veryslow`) to trade encoding time for
   compression efficiency; remembered in config (defaults to `fast`).
 - Target-size mode: enter a desired MB size per video and the app runs a 2-pass

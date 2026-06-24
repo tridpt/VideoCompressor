@@ -354,3 +354,103 @@ def test_build_two_pass_commands_no_720p_has_no_scale():
     )
     assert "-vf" not in p1
     assert "-vf" not in p2
+
+
+# ---------- is_hardware_encoder / nvenc_preset ----------
+def test_is_hardware_encoder():
+    assert main.is_hardware_encoder("h264_nvenc")
+    assert main.is_hardware_encoder("hevc_nvenc")
+    assert main.is_hardware_encoder("h264_qsv")
+    assert not main.is_hardware_encoder("libx264")
+    assert not main.is_hardware_encoder("libx265")
+
+
+def test_nvenc_preset_mapping():
+    assert main.nvenc_preset("ultrafast") == "p1"
+    assert main.nvenc_preset("fast") == "p4"
+    assert main.nvenc_preset("veryslow") == "p7"
+    # Giá trị lạ -> mặc định p4
+    assert main.nvenc_preset("khong-co") == "p4"
+
+
+# ---------- build_ffmpeg_command: nhánh NVENC ----------
+def test_build_ffmpeg_command_nvenc_uses_cq_not_crf():
+    cmd = main.build_ffmpeg_command("in.mp4", "out.mp4", 28, "h264_nvenc", False, preset="fast")
+    assert "-crf" not in cmd
+    assert cmd[cmd.index("-cq") + 1] == "28"
+    assert cmd[cmd.index("-rc") + 1] == "vbr"
+    # Preset phải đổi sang dạng p-value
+    assert cmd[cmd.index("-preset") + 1] == "p4"
+
+
+def test_build_ffmpeg_command_cpu_still_uses_crf():
+    cmd = main.build_ffmpeg_command("in.mp4", "out.mp4", 28, "libx264", False, preset="slow")
+    assert "-cq" not in cmd
+    assert cmd[cmd.index("-crf") + 1] == "28"
+    assert cmd[cmd.index("-preset") + 1] == "slow"
+
+
+# ---------- build_nvenc_abr_command ----------
+def test_build_nvenc_abr_command_structure():
+    cmd = main.build_nvenc_abr_command("in.mp4", "out.mp4", "hevc_nvenc", 2000, False, "fast")
+    assert cmd[cmd.index("-b:v") + 1] == "2000k"
+    assert cmd[cmd.index("-maxrate") + 1] == "3000k"   # 1.5x
+    assert cmd[cmd.index("-bufsize") + 1] == "4000k"   # 2x
+    assert cmd[cmd.index("-preset") + 1] == "p4"
+    assert cmd[-1] == "out.mp4"
+
+
+def test_build_nvenc_abr_command_720p():
+    cmd = main.build_nvenc_abr_command("in.mp4", "out.mp4", "h264_nvenc", 1500, True, "slow")
+    assert "scale=-2:720" in cmd
+    assert cmd[cmd.index("-preset") + 1] == "p5"
+
+
+# ---------- detect_available_encoders (runner giả) ----------
+class _FakeResult:
+    def __init__(self, returncode):
+        self.returncode = returncode
+
+
+def test_detect_encoders_all_available():
+    runner = lambda *a, **k: _FakeResult(0)
+    assert main.detect_available_encoders(runner=runner) == {"h264_nvenc", "hevc_nvenc"}
+
+
+def test_detect_encoders_none_available():
+    runner = lambda *a, **k: _FakeResult(1)
+    assert main.detect_available_encoders(runner=runner) == set()
+
+
+def test_detect_encoders_handles_exception():
+    def runner(*a, **k):
+        raise OSError("ffmpeg not found")
+    assert main.detect_available_encoders(runner=runner) == set()
+
+
+# ---------- format_size_change ----------
+def test_format_size_change_smaller():
+    mb = 1024 * 1024
+    text, grew = main.format_size_change(100 * mb, 25 * mb)
+    assert grew is False
+    assert "-75%" in text
+    assert "⚠" not in text
+
+
+def test_format_size_change_bigger_warns():
+    mb = 1024 * 1024
+    text, grew = main.format_size_change(10 * mb, 12 * mb)
+    assert grew is True
+    assert "⚠" in text
+    assert "+20%" in text
+
+
+def test_format_size_change_equal_warns():
+    mb = 1024 * 1024
+    text, grew = main.format_size_change(5 * mb, 5 * mb)
+    assert grew is True
+
+
+def test_format_size_change_zero_input():
+    text, grew = main.format_size_change(0, 100)
+    assert grew is False
