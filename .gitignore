@@ -16,6 +16,7 @@ env/
 build/
 dist/
 *.spec
+!SuperVideoCompressor.spec
 
 # App config & logs cá nhân
 config.json

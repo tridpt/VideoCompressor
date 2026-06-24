@@ -15,6 +15,7 @@ A fast, lightweight, and user-friendly GUI application built with Python and `Cu
 ## 🌟 Features
 
 * **Modern GUI:** A sleek Dark Mode interface built using `CustomTkinter`. Simple and responsive.
+* **Bilingual UI (VI/EN):** Switch the whole interface between Vietnamese and English on the fly from the language menu; your choice is remembered.
 * **Drag & Drop:** Drop one or more video files straight onto the list, no need to open a dialog. Non-video files are filtered out automatically.
 * **Batch Compression:** Select multiple videos at once and the app compresses them one after another, reporting overall progress and a final summary (e.g. "3/3 done"). Files that fail validation are skipped and logged, so one bad file won't stop the whole batch.
 * **Per-File Size Report:** Each video in the list shows its original size, then updates to `before ➡️ after (-NN%)` the moment that file finishes, on top of the overall savings summary.
@@ -29,6 +30,8 @@ A fast, lightweight, and user-friendly GUI application built with Python and `Cu
 * **Two Compression Modes:**
   * **Quality (CRF):** dial in a constant-quality factor with the slider.
   * **Target Size (MB):** type the size you want each video to end up at (e.g. 25 MB for Discord) and the app runs a 2-pass encode to hit it. The required video bitrate is computed from the video duration automatically.
+* **Trim Before Compressing:** optionally cut each video to a time range (`From`/`To` in `hh:mm:ss`) so you only encode the part you need.
+* **Audio Control:** choose the output audio bitrate (96k/128k/192k/256k) or keep the original audio stream untouched.
 * **Lossless-like Quality:** Uses highly efficient modern codecs to minimize file size while preserving stunning visual details.
 * **Customizable Compression:** Includes an interactive slider to dial in the perfect CRF (Constant Rate Factor) value, giving you total control over the balance between compression strength and output quality (Defaults to a recommended 28).
 * **Cancel Anytime:** A dedicated cancel button stops the running encode immediately and cleans up the unfinished output file.
@@ -54,13 +57,24 @@ Ensure you have **Python 3.10+** installed.
 
 2. **Install dependencies:**
    ```bash
-   pip install customtkinter static_ffmpeg tkinterdnd2
+   pip install -r requirements.txt
    ```
 
 3. **Run the App:**
    ```bash
    python main.py
    ```
+
+### Building a standalone `.exe`
+
+A PyInstaller spec is included that bundles `customtkinter`, `tkinterdnd2`, and
+`static_ffmpeg` so the result runs without a Python install:
+
+```bash
+pyinstaller SuperVideoCompressor.spec --noconfirm
+```
+
+The executable is produced in `dist/SuperVideoCompressor.exe`.
 
 ## 🎮 How to Use
 
@@ -70,8 +84,11 @@ Ensure you have **Python 3.10+** installed.
    * **Quality (CRF):** use the slider. Lower value = larger files & better quality; higher value = stronger compression. 28 is the sweet spot.
    * **Target Size (MB):** type how big each output should be; the app runs a 2-pass encode to reach it.
 4. *Optional:* Select the 720p downscaler if you're compressing massive videos to send via email or Discord.
-5. *Optional:* Click **Chọn thư mục (Choose Folder)** to save the results somewhere specific, or leave it on the default (next to the source files).
-6. Hit **BẮT ĐẦU NÉN VIDEO (START)** and watch the progress bar and ETA, plus each file's before/after size as it finishes. You can press **HỦY (Cancel)** at any time to stop. The output folder opens automatically when finished.
+5. *Optional:* Tick **Cắt video / Trim video** and enter a `From`/`To` range to compress only part of the clip, and pick an audio bitrate (or keep the original).
+6. *Optional:* Click **Chọn thư mục (Choose Folder)** to save the results somewhere specific, or leave it on the default (next to the source files).
+7. Hit **BẮT ĐẦU NÉN VIDEO (START)** and watch the progress bar and ETA, plus each file's before/after size as it finishes. You can press **HỦY (Cancel)** at any time to stop. The output folder opens automatically when finished.
+
+> Tip: Use the language menu in the top-right to switch the interface between Tiếng Việt and English at any time.
 
 ## 👨‍💻 Developer Notes
 

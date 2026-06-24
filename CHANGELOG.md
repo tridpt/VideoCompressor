@@ -8,10 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Bilingual UI (Vietnamese / English) with a language switcher; the whole
+  interface is rebuilt on switch and the choice is remembered. Internal mode,
+  codec, and status identifiers are language-independent.
+- Trim before compressing: optional `From`/`To` time range (hh:mm:ss) applied
+  to every file; effective duration drives progress and target-bitrate math.
+- Audio bitrate control (96k/128k/192k/256k or keep original via stream copy).
+- PyInstaller spec (`SuperVideoCompressor.spec`) bundling customtkinter,
+  tkinterdnd2, and static_ffmpeg for a standalone `.exe`.
+- Pure helpers `parse_time_to_seconds`, `trim_args`, `audio_args`, and `tr`
+  (i18n lookup); builders now accept `ss`/`to`/`audio_bitrate`. All unit-tested.
 - GPU acceleration via NVIDIA NVENC (`h264_nvenc` / `hevc_nvenc`): GPU codec
   options appear only when a real test-encode succeeds at startup, avoiding
-  dead options on machines without the right driver. NVENC uses `-cq` for
-  quality and single-pass ABR for target-size mode.
+  dead options on machines without the right driver.
 - Per-row **✕** button to remove a single file from the list (disabled during
   a running batch).
 - Bigger-output warning: a finished file that is not smaller than its source

@@ -143,7 +143,7 @@ def test_build_ffmpeg_command_basic():
     assert "-i" in cmd and cmd[cmd.index("-i") + 1] == "in.mp4"
     assert cmd[cmd.index("-vcodec") + 1] == "libx265"
     assert cmd[cmd.index("-crf") + 1] == "28"
-    assert cmd[cmd.index("-acodec") + 1] == "aac"
+    assert cmd[cmd.index("-c:a") + 1] == "aac"
     # Đường dẫn đầu ra luôn là tham số cuối
     assert cmd[-1] == "out.mp4"
 
@@ -166,7 +166,7 @@ def test_build_ffmpeg_command_with_720p_adds_scale_filter():
     assert "-vf" in cmd
     assert cmd[cmd.index("-vf") + 1] == "scale=-2:720"
     # Bộ lọc 720p phải đứng trước phần audio/output
-    assert cmd.index("-vf") < cmd.index("-acodec")
+    assert cmd.index("-vf") < cmd.index("-c:a")
 
 
 def test_build_ffmpeg_command_enables_progress_output():
@@ -454,3 +454,97 @@ def test_format_size_change_equal_warns():
 def test_format_size_change_zero_input():
     text, grew = main.format_size_change(0, 100)
     assert grew is False
+
+
+# ---------- parse_time_to_seconds ----------
+def test_parse_time_seconds_only():
+    assert main.parse_time_to_seconds("90") == 90
+    assert main.parse_time_to_seconds("5.5") == 5.5
+
+
+def test_parse_time_mm_ss():
+    assert main.parse_time_to_seconds("1:30") == 90
+    assert main.parse_time_to_seconds("02:05") == 125
+
+
+def test_parse_time_hh_mm_ss():
+    assert main.parse_time_to_seconds("1:00:00") == 3600
+    assert main.parse_time_to_seconds("00:01:30") == 90
+
+
+def test_parse_time_invalid():
+    assert main.parse_time_to_seconds("") is None
+    assert main.parse_time_to_seconds(None) is None
+    assert main.parse_time_to_seconds("abc") is None
+    assert main.parse_time_to_seconds("1:2:3:4") is None
+    assert main.parse_time_to_seconds("-5") is None
+
+
+# ---------- trim_args / audio_args ----------
+def test_trim_args():
+    assert main.trim_args() == []
+    assert main.trim_args("00:00:02") == ["-ss", "00:00:02"]
+    assert main.trim_args("2", "6") == ["-ss", "2", "-to", "6"]
+    assert main.trim_args(None, "6") == ["-to", "6"]
+
+
+def test_audio_args():
+    assert main.audio_args("128k") == ["-c:a", "aac", "-b:a", "128k"]
+    assert main.audio_args("192k") == ["-c:a", "aac", "-b:a", "192k"]
+    assert main.audio_args("copy") == ["-c:a", "copy"]
+
+
+# ---------- builders honour trim & audio ----------
+def test_build_ffmpeg_command_with_trim_and_audio():
+    cmd = main.build_ffmpeg_command(
+        "in.mp4", "out.mp4", 28, "libx264", False,
+        ss="00:00:02", to="00:00:06", audio_bitrate="192k"
+    )
+    assert cmd[cmd.index("-ss") + 1] == "00:00:02"
+    assert cmd[cmd.index("-to") + 1] == "00:00:06"
+    assert cmd[cmd.index("-b:a") + 1] == "192k"
+    # trim phải đứng ngay sau -i (trước -vcodec)
+    assert cmd.index("-ss") < cmd.index("-vcodec")
+
+
+def test_build_ffmpeg_command_audio_copy():
+    cmd = main.build_ffmpeg_command("in.mp4", "out.mp4", 28, "libx264", False, audio_bitrate="copy")
+    assert cmd[cmd.index("-c:a") + 1] == "copy"
+    assert "-b:a" not in cmd
+
+
+def test_two_pass_commands_with_trim():
+    p1, p2 = main.build_two_pass_commands(
+        "in.mp4", "out.mp4", "libx264", 2000, False, "fast", "log",
+        ss="2", to="6", audio_bitrate="96k"
+    )
+    assert p1[p1.index("-ss") + 1] == "2" and p1[p1.index("-to") + 1] == "6"
+    assert p2[p2.index("-b:a") + 1] == "96k"
+
+
+def test_nvenc_abr_command_with_trim():
+    cmd = main.build_nvenc_abr_command(
+        "in.mp4", "out.mp4", "h264_nvenc", 1500, False, "fast",
+        ss="1", to="9", audio_bitrate="copy"
+    )
+    assert cmd[cmd.index("-ss") + 1] == "1"
+    assert cmd[cmd.index("-c:a") + 1] == "copy"
+
+
+# ---------- bảng dịch i18n ----------
+def test_translations_have_same_keys():
+    vi_keys = set(main.TRANSLATIONS["vi"].keys())
+    en_keys = set(main.TRANSLATIONS["en"].keys())
+    assert vi_keys == en_keys
+
+
+def test_tr_fallback_and_format():
+    # Khoá không có -> trả về chính khoá
+    assert main.tr("vi", "khong_ton_tai") == "khong_ton_tai"
+    # Có placeholder
+    assert "5" in main.tr("vi", "crf_rec", v=5)
+    assert "5" in main.tr("en", "crf_rec", v=5)
+
+
+def test_tr_unknown_lang_falls_back_to_vi():
+    assert main.tr("xx", "btn_clear") == main.TRANSLATIONS["vi"]["btn_clear"]
