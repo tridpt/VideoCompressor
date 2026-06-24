@@ -283,3 +283,74 @@ def test_parse_dropped_files_handles_braced_paths():
 def test_parse_dropped_files_empty():
     assert main.parse_dropped_files("", splitter=lambda r: []) == []
     assert main.parse_dropped_files("readme.md photo.jpg", splitter=lambda r: r.split()) == []
+
+
+# ---------- build_ffmpeg_command: preset ----------
+def test_build_ffmpeg_command_default_preset():
+    cmd = main.build_ffmpeg_command("in.mp4", "out.mp4", 28, "libx265", False)
+    assert cmd[cmd.index("-preset") + 1] == "fast"
+
+
+def test_build_ffmpeg_command_custom_preset():
+    cmd = main.build_ffmpeg_command("in.mp4", "out.mp4", 28, "libx265", False, preset="veryslow")
+    assert cmd[cmd.index("-preset") + 1] == "veryslow"
+
+
+# ---------- compute_video_bitrate ----------
+def test_compute_video_bitrate_basic():
+    # 25MB, 60s, audio 128kbps -> (25*8192/60) - 128 = 3413.33 - 128 -> 3285
+    assert main.compute_video_bitrate(25, 60) == 3285
+
+
+def test_compute_video_bitrate_subtracts_audio():
+    no_audio = main.compute_video_bitrate(25, 60, audio_kbps=0)
+    with_audio = main.compute_video_bitrate(25, 60, audio_kbps=128)
+    assert no_audio - with_audio == 128
+
+
+def test_compute_video_bitrate_zero_duration_returns_none():
+    assert main.compute_video_bitrate(25, 0) is None
+
+
+def test_compute_video_bitrate_zero_target_returns_none():
+    assert main.compute_video_bitrate(0, 60) is None
+
+
+def test_compute_video_bitrate_too_small_returns_none():
+    # 1MB cho video dài 600s -> bitrate quá thấp -> None
+    assert main.compute_video_bitrate(1, 600) is None
+
+
+# ---------- build_two_pass_commands ----------
+def test_build_two_pass_commands_structure():
+    p1, p2 = main.build_two_pass_commands(
+        "in.mp4", "out.mp4", "libx265", 3000, False, "fast", "log", null_path="NUL"
+    )
+    # Pass 1: bỏ audio, ghi ra null, đánh dấu pass 1
+    assert "-an" in p1
+    assert p1[p1.index("-pass") + 1] == "1"
+    assert p1[-1] == "NUL"
+    assert p1[p1.index("-b:v") + 1] == "3000k"
+    # Pass 2: có audio aac, đánh dấu pass 2, xuất ra file thật
+    assert p2[p2.index("-pass") + 1] == "2"
+    assert p2[p2.index("-c:a") + 1] == "aac"
+    assert p2[-1] == "out.mp4"
+    # Cùng dùng chung passlogfile
+    assert p1[p1.index("-passlogfile") + 1] == "log"
+    assert p2[p2.index("-passlogfile") + 1] == "log"
+
+
+def test_build_two_pass_commands_720p_filter():
+    p1, p2 = main.build_two_pass_commands(
+        "in.mp4", "out.mp4", "libx264", 2000, True, "medium", "log"
+    )
+    assert "scale=-2:720" in p1
+    assert "scale=-2:720" in p2
+
+
+def test_build_two_pass_commands_no_720p_has_no_scale():
+    p1, p2 = main.build_two_pass_commands(
+        "in.mp4", "out.mp4", "libx264", 2000, False, "medium", "log"
+    )
+    assert "-vf" not in p1
+    assert "-vf" not in p2

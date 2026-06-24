@@ -8,6 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Speed preset selector (`ultrafast` … `veryslow`) to trade encoding time for
+  compression efficiency; remembered in config (defaults to `fast`).
+- Target-size mode: enter a desired MB size per video and the app runs a 2-pass
+  encode to hit it, computing the video bitrate from the duration. A mode
+  switch toggles between Quality (CRF) and Target Size.
+- Pure helpers `compute_video_bitrate` and `build_two_pass_commands`, plus a
+  `preset` argument on `build_ffmpeg_command`, all covered by unit tests.
 - Drag & drop: drop video files straight onto the list (via `tkinterdnd2`);
   non-video files are filtered out automatically.
 - Per-file size report: each row now shows original size, then

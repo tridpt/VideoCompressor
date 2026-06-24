@@ -4,6 +4,8 @@ import os
 import sys
 import json
 import time
+import glob
+import tempfile
 import subprocess
 import threading
 import static_ffmpeg
@@ -43,6 +45,16 @@ STATUS_COLORS = {
 
 # Đuôi file video được chấp nhận (dùng cho cả dialog lẫn kéo-thả)
 VIDEO_EXTENSIONS = {".mp4", ".mkv", ".avi", ".mov", ".flv", ".wmv", ".webm", ".m4v"}
+
+# Các preset tốc độ của x264/x265 (nhanh -> chậm, chậm hơn = nén tốt hơn)
+PRESETS = [
+    "ultrafast", "superfast", "veryfast", "faster",
+    "fast", "medium", "slow", "slower", "veryslow",
+]
+
+# Hai chế độ nén
+MODE_CRF = "Chất lượng (CRF)"
+MODE_SIZE = "Dung lượng mục tiêu (MB)"
 
 
 # ---------- Hàm logic thuần (tách riêng để dễ test, không phụ thuộc GUI) ----------
@@ -160,17 +172,18 @@ def save_config(data, path=CONFIG_PATH):
         return False
 
 
-def build_ffmpeg_command(input_path, output_path, crf_value, vcodec, force_720p):
-    """Dựng danh sách tham số dòng lệnh FFmpeg (hàm thuần, dễ test).
+def build_ffmpeg_command(input_path, output_path, crf_value, vcodec, force_720p, preset="fast"):
+    """Dựng danh sách tham số dòng lệnh FFmpeg cho chế độ CRF một lượt
+    (hàm thuần, dễ test).
 
-    Tách riêng khỏi GUI để có thể kiểm tra codec, CRF, bộ lọc 720p và
-    đường dẫn đầu ra được đặt đúng mà không cần chạy FFmpeg thật."""
+    Tách riêng khỏi GUI để có thể kiểm tra codec, CRF, preset, bộ lọc 720p
+    và đường dẫn đầu ra được đặt đúng mà không cần chạy FFmpeg thật."""
     command = [
         'ffmpeg', '-y',
         '-i', input_path,
         '-vcodec', vcodec,
         '-crf', str(crf_value),
-        '-preset', 'fast',
+        '-preset', preset,
     ]
     if force_720p:
         command.extend(['-vf', 'scale=-2:720'])
@@ -181,6 +194,49 @@ def build_ffmpeg_command(input_path, output_path, crf_value, vcodec, force_720p)
         output_path,
     ])
     return command
+
+
+def compute_video_bitrate(target_mb, duration_sec, audio_kbps=128, min_video_kbps=100):
+    """Tính bitrate video (kbps) để file đầu ra xấp xỉ `target_mb` MB.
+
+    Trả về None nếu không tính được (thiếu độ dài) hoặc mục tiêu quá nhỏ
+    đến mức không còn đủ bitrate hợp lý cho video.
+    Quy ước: 1 MB ≈ 8192 kbit; trừ phần dành cho audio."""
+    if target_mb <= 0 or duration_sec <= 0:
+        return None
+    total_kbps = (target_mb * 8192) / duration_sec
+    video_kbps = int(total_kbps - audio_kbps)
+    if video_kbps < min_video_kbps:
+        return None
+    return video_kbps
+
+
+def build_two_pass_commands(input_path, output_path, vcodec, bitrate_kbps,
+                            force_720p, preset, passlogfile, null_path=os.devnull):
+    """Dựng cặp lệnh FFmpeg 2-pass cho chế độ nén theo dung lượng mục tiêu.
+
+    Trả về (cmd_pass1, cmd_pass2). Pass 1 phân tích và bỏ audio, ghi ra
+    null; pass 2 mã hoá thật kèm audio AAC."""
+    scale = ['-vf', 'scale=-2:720'] if force_720p else []
+    pass1 = [
+        'ffmpeg', '-y', '-i', input_path,
+        '-c:v', vcodec, '-b:v', f'{bitrate_kbps}k',
+        '-preset', preset, *scale,
+        '-pass', '1', '-passlogfile', passlogfile,
+        '-an', '-f', 'null',
+        '-progress', 'pipe:1', '-nostats',
+        null_path,
+    ]
+    pass2 = [
+        'ffmpeg', '-y', '-i', input_path,
+        '-c:v', vcodec, '-b:v', f'{bitrate_kbps}k',
+        '-preset', preset, *scale,
+        '-pass', '2', '-passlogfile', passlogfile,
+        '-c:a', 'aac',
+        '-progress', 'pipe:1', '-nostats',
+        output_path,
+    ]
+    return pass1, pass2
 
 
 def parse_progress_fraction(line, total_duration):
@@ -214,8 +270,8 @@ class VideoCompressorApp(ctk.CTk):
                 self.dnd_enabled = False
 
         self.title("Super Video Compressor (Free & Lossless Quality)")
-        self.geometry("640x900")
-        self.minsize(640, 900)
+        self.geometry("640x1000")
+        self.minsize(640, 1000)
 
         # Danh sách file đầu vào (hỗ trợ nén hàng loạt)
         self.input_files = []
@@ -254,6 +310,9 @@ class VideoCompressorApp(ctk.CTk):
             "force_720p": bool(self.check_720p.get()),
             "last_dir": self.last_dir,
             "output_dir": self.output_dir,
+            "preset": self.preset_selector.get(),
+            "mode": self.mode_selector.get(),
+            "target_mb": self.entry_target.get().strip(),
         }
         save_config(data, CONFIG_PATH)
 
@@ -271,8 +330,21 @@ class VideoCompressorApp(ctk.CTk):
         if self.config.get("force_720p"):
             self.check_720p.select()
 
-        # Hiển thị thư mục output đã nhớ (nếu có)
+        preset = self.config.get("preset")
+        if preset in PRESETS:
+            self.preset_selector.set(preset)
+
+        mode = self.config.get("mode")
+        if mode in (MODE_CRF, MODE_SIZE):
+            self.mode_selector.set(mode)
+
+        target = self.config.get("target_mb")
+        if isinstance(target, str) and target:
+            self.entry_target.insert(0, target)
+
+        # Hiển thị thư mục output đã nhớ + đồng bộ trạng thái theo chế độ
         self.update_output_dir_label()
+        self._apply_mode_state()
 
     def on_close(self):
         """Lưu cấu hình rồi đóng app."""
@@ -319,6 +391,48 @@ class VideoCompressorApp(ctk.CTk):
         self.codec_selector = ctk.CTkSegmentedButton(self.frame_codec, values=list(CODECS.keys()))
         self.codec_selector.set("H.265 (nén sâu)")  # mặc định nén sâu
         self.codec_selector.pack(side="left", padx=10, pady=10, expand=True, fill="x")
+
+        # Preset tốc độ (nhanh <-> nén tốt)
+        self.frame_preset = ctk.CTkFrame(self)
+        self.frame_preset.pack(pady=8, padx=20, fill="x")
+
+        self.lbl_preset = ctk.CTkLabel(self.frame_preset, text="Tốc độ (preset):")
+        self.lbl_preset.pack(side="left", padx=10, pady=10)
+
+        self.preset_selector = ctk.CTkOptionMenu(self.frame_preset, values=PRESETS)
+        self.preset_selector.set("fast")
+        self.preset_selector.pack(side="left", padx=10, pady=10)
+
+        self.lbl_preset_hint = ctk.CTkLabel(
+            self.frame_preset, text="← nhanh hơn | nén tốt hơn →", text_color="gray", font=("Roboto", 11)
+        )
+        self.lbl_preset_hint.pack(side="left", padx=6, pady=10)
+
+        # Chế độ nén: theo chất lượng (CRF) hoặc theo dung lượng mục tiêu (MB)
+        self.frame_mode = ctk.CTkFrame(self)
+        self.frame_mode.pack(pady=8, padx=20, fill="x")
+
+        self.lbl_mode = ctk.CTkLabel(self.frame_mode, text="Chế độ:")
+        self.lbl_mode.pack(side="left", padx=10, pady=10)
+
+        self.mode_selector = ctk.CTkSegmentedButton(
+            self.frame_mode, values=[MODE_CRF, MODE_SIZE], command=self.on_mode_change
+        )
+        self.mode_selector.set(MODE_CRF)
+        self.mode_selector.pack(side="left", padx=10, pady=10, expand=True, fill="x")
+
+        # Ô nhập dung lượng mục tiêu (chỉ dùng ở chế độ MODE_SIZE)
+        self.frame_target = ctk.CTkFrame(self)
+        self.frame_target.pack(pady=0, padx=20, fill="x")
+
+        self.lbl_target = ctk.CTkLabel(self.frame_target, text="Dung lượng mục tiêu mỗi video:")
+        self.lbl_target.pack(side="left", padx=10, pady=10)
+
+        self.entry_target = ctk.CTkEntry(self.frame_target, width=90, placeholder_text="MB")
+        self.entry_target.pack(side="left", padx=6, pady=10)
+
+        self.lbl_target_unit = ctk.CTkLabel(self.frame_target, text="MB (nén 2-pass)", text_color="gray")
+        self.lbl_target_unit.pack(side="left", padx=4, pady=10)
 
         # Mức độ nén (CRF)
         self.frame_quality = ctk.CTkFrame(self)
@@ -407,6 +521,20 @@ class VideoCompressorApp(ctk.CTk):
         else:
             txt = f"{value} (Khuyên dùng)"
         self.lbl_crf_val.configure(text=txt)
+
+    def on_mode_change(self, _value=None):
+        """Bật/tắt widget tuỳ chế độ: CRF dùng slider, Target size dùng ô MB."""
+        self._apply_mode_state()
+
+    def _apply_mode_state(self):
+        """Đồng bộ trạng thái enable/disable của slider CRF và ô dung lượng."""
+        is_size = self.mode_selector.get() == MODE_SIZE
+        # Ở chế độ dung lượng: khoá slider CRF, mở ô nhập MB và ngược lại
+        self.slider_quality.configure(state="disabled" if is_size else "normal")
+        self.entry_target.configure(state="normal" if is_size else "disabled")
+        self.lbl_quality.configure(text_color="gray" if is_size else "white")
+        self.lbl_target.configure(text_color="white" if is_size else "gray")
+        self.lbl_target_unit.configure(text_color="gray")
 
     # ---------- Kéo & thả ----------
     def _register_drop_target(self):
@@ -575,6 +703,21 @@ class VideoCompressorApp(ctk.CTk):
             messagebox.showwarning("Cảnh báo", "Vui lòng chọn video trước khi nén!")
             return
 
+        mode = self.mode_selector.get()
+        target_mb = None
+        if mode == MODE_SIZE:
+            raw = self.entry_target.get().strip().replace(",", ".")
+            try:
+                target_mb = float(raw)
+                if target_mb <= 0:
+                    raise ValueError
+            except ValueError:
+                messagebox.showwarning(
+                    "Cảnh báo",
+                    "Vui lòng nhập dung lượng mục tiêu hợp lệ (số MB > 0)."
+                )
+                return
+
         # Lưu cấu hình ngay khi bắt đầu (nhớ lựa chọn cho lần sau)
         self.save_config()
 
@@ -590,17 +733,24 @@ class VideoCompressorApp(ctk.CTk):
         self.btn_start.configure(state="disabled", text="Đang xử lý, vui lòng chờ...")
         self.btn_select.configure(state="disabled")
         self.codec_selector.configure(state="disabled")
+        self.preset_selector.configure(state="disabled")
+        self.mode_selector.configure(state="disabled")
         self.btn_cancel.configure(state="normal")
         self.progress_bar.set(0)
         self.lbl_status.configure(text="Đang chuẩn bị...", text_color="orange")
 
-        crf_value = int(self.slider_quality.get())
-        vcodec = CODECS.get(self.codec_selector.get(), "libx265")
-        force_720p = self.check_720p.get() == 1
+        opts = {
+            "mode": mode,
+            "crf": int(self.slider_quality.get()),
+            "vcodec": CODECS.get(self.codec_selector.get(), "libx265"),
+            "force_720p": self.check_720p.get() == 1,
+            "preset": self.preset_selector.get(),
+            "target_mb": target_mb,
+        }
 
         threading.Thread(
             target=self.run_batch,
-            args=(list(self.input_files), crf_value, vcodec, force_720p),
+            args=(list(self.input_files), opts),
             daemon=True
         ).start()
 
@@ -686,7 +836,7 @@ class VideoCompressorApp(ctk.CTk):
         )
 
     # ---------- Vòng nén hàng loạt ----------
-    def run_batch(self, files, crf_value, vcodec, force_720p):
+    def run_batch(self, files, opts):
         total = len(files)
         success_count = 0
         total_in_bytes = 0   # tổng dung lượng gốc của các file nén thành công
@@ -707,10 +857,7 @@ class VideoCompressorApp(ctk.CTk):
 
                 self.after(0, self.set_file_status, input_path, "đang nén")
                 self.output_file = self.make_output_path(input_path)
-                ok = self.compress_one(
-                    input_path, self.output_file, crf_value, vcodec, force_720p,
-                    index, total, prefix
-                )
+                ok = self.compress_one(input_path, self.output_file, opts, index, total, prefix)
                 if self.is_cancelled:
                     self._cleanup_partial_output()
                     break
@@ -752,12 +899,11 @@ class VideoCompressorApp(ctk.CTk):
         """Tóm tắt tổng dung lượng tiết kiệm (uỷ thác cho hàm module)."""
         return format_savings(in_bytes, out_bytes)
 
-    def compress_one(self, input_path, output_path, crf_value, vcodec, force_720p, index, total, prefix):
-        """Nén một file. Trả về True nếu thành công."""
-        total_duration = self.get_video_duration(input_path)
+    def _run_ffmpeg(self, command, total_duration, map_fraction, label):
+        """Chạy một tiến trình FFmpeg, cập nhật tiến trình realtime.
 
-        command = build_ffmpeg_command(input_path, output_path, crf_value, vcodec, force_720p)
-
+        `map_fraction(file_fraction)` đổi % của lượt hiện tại thành % tổng của
+        cả lô. Trả về (returncode, stderr_text)."""
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -766,7 +912,7 @@ class VideoCompressorApp(ctk.CTk):
         )
         self.process = process
 
-        # Đọc stderr song song để tránh deadlock do buffer đầy (libx265/libx264 ghi nhiều)
+        # Đọc stderr song song để tránh deadlock do buffer đầy (libx265/x264 ghi nhiều)
         stderr_lines = []
 
         def drain_stderr():
@@ -779,22 +925,87 @@ class VideoCompressorApp(ctk.CTk):
         for line in process.stdout:
             file_fraction = parse_progress_fraction(line, total_duration)
             if file_fraction is not None:
-                # Tiến trình tổng = số file xong + phần file hiện tại, chia tổng số file
-                overall = (index + file_fraction) / total
-                self.after(0, self.update_progress, overall, f"{prefix} Đang nén...")
+                self.after(0, self.update_progress, map_fraction(file_fraction), label)
 
         process.wait()
         stderr_thread.join(timeout=5)
+        return process.returncode, ''.join(stderr_lines)
 
+    def compress_one(self, input_path, output_path, opts, index, total, prefix):
+        """Nén một file theo chế độ trong `opts`. Trả về True nếu thành công."""
+        total_duration = self.get_video_duration(input_path)
+        vcodec = opts["vcodec"]
+        preset = opts["preset"]
+        force_720p = opts["force_720p"]
+
+        if opts["mode"] == MODE_SIZE:
+            return self._compress_target_size(
+                input_path, output_path, total_duration, vcodec, preset,
+                force_720p, opts["target_mb"], index, total, prefix
+            )
+
+        # ----- Chế độ CRF (một lượt) -----
+        command = build_ffmpeg_command(
+            input_path, output_path, opts["crf"], vcodec, force_720p, preset
+        )
+        rc, stderr_text = self._run_ffmpeg(
+            command, total_duration,
+            lambda f: (index + f) / total, f"{prefix} Đang nén..."
+        )
         if self.is_cancelled:
             return False
-        if process.returncode == 0:
-            # Cập nhật tiến trình tổng cho trọn file này
+        if rc == 0:
             self.after(0, self.update_progress, (index + 1) / total, f"{prefix} Đang nén...")
             return True
-        else:
-            self.write_error_log(''.join(stderr_lines))
+        self.write_error_log(stderr_text)
+        return False
+
+    def _compress_target_size(self, input_path, output_path, total_duration, vcodec,
+                              preset, force_720p, target_mb, index, total, prefix):
+        """Nén 2-pass để đạt dung lượng mục tiêu (target_mb)."""
+        bitrate = compute_video_bitrate(target_mb, total_duration)
+        if bitrate is None:
+            self.write_error_log(
+                f"Không nén theo dung lượng được cho {input_path}: "
+                f"thiếu độ dài video hoặc mục tiêu {target_mb}MB quá nhỏ."
+            )
             return False
+
+        passlog = os.path.join(tempfile.gettempdir(), f"svc_pass_{os.getpid()}_{index}")
+        try:
+            cmd1, cmd2 = build_two_pass_commands(
+                input_path, output_path, vcodec, bitrate, force_720p, preset, passlog
+            )
+            # Pass 1 -> nửa đầu thanh tiến trình của file này
+            rc1, err1 = self._run_ffmpeg(
+                cmd1, total_duration,
+                lambda f: (index + f * 0.5) / total, f"{prefix} Lượt 1/2 (phân tích)..."
+            )
+            if self.is_cancelled:
+                return False
+            if rc1 != 0:
+                self.write_error_log(err1)
+                return False
+
+            # Pass 2 -> nửa sau
+            rc2, err2 = self._run_ffmpeg(
+                cmd2, total_duration,
+                lambda f: (index + 0.5 + f * 0.5) / total, f"{prefix} Lượt 2/2 (mã hoá)..."
+            )
+            if self.is_cancelled:
+                return False
+            if rc2 == 0:
+                self.after(0, self.update_progress, (index + 1) / total, f"{prefix} Hoàn tất file...")
+                return True
+            self.write_error_log(err2)
+            return False
+        finally:
+            # Dọn các file log tạm của 2-pass (passlog-0.log, .mbtree, ...)
+            for leftover in glob.glob(passlog + "*"):
+                try:
+                    os.remove(leftover)
+                except OSError:
+                    pass
 
     def _cleanup_partial_output(self):
         """Xóa file đầu ra dở dang sau khi hủy."""
@@ -812,9 +1023,13 @@ class VideoCompressorApp(ctk.CTk):
         self.btn_cancel.configure(state="disabled", text="✖ HỦY")
         self.btn_select.configure(state="normal")
         self.codec_selector.configure(state="normal")
+        self.preset_selector.configure(state="normal")
+        self.mode_selector.configure(state="normal")
         self.lbl_status.configure(text=status_text, text_color=text_color)
 
         self.is_cancelled = False
+        # Khôi phục trạng thái slider/ô nhập theo chế độ hiện tại
+        self._apply_mode_state()
 
         # Mở thư mục chứa file khi có ít nhất 1 file thành công
         if "XONG" in status_text or "Hoàn tất" in status_text:

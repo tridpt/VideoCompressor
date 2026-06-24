@@ -22,6 +22,10 @@ A fast, lightweight, and user-friendly GUI application built with Python and `Cu
 * **Custom Output Folder:** Save compressed files to a folder you choose, or keep the default of saving next to the source. Your choice is remembered.
 * **Remembers Your Choices:** Your codec, CRF, 720p option, output folder, and last-used folder are saved to a local `config.json` and restored next time you open the app, no need to reconfigure.
 * **Codec Choice:** Pick between **H.265 (`libx265`)** for the deepest compression or **H.264 (`libx264`)** for the widest device/player compatibility.
+* **Speed Preset:** Choose any FFmpeg preset from `ultrafast` to `veryslow` to trade encoding time for compression efficiency (defaults to `fast`).
+* **Two Compression Modes:**
+  * **Quality (CRF):** dial in a constant-quality factor with the slider.
+  * **Target Size (MB):** type the size you want each video to end up at (e.g. 25 MB for Discord) and the app runs a 2-pass encode to hit it. The required video bitrate is computed from the video duration automatically.
 * **Lossless-like Quality:** Uses highly efficient modern codecs to minimize file size while preserving stunning visual details.
 * **Customizable Compression:** Includes an interactive slider to dial in the perfect CRF (Constant Rate Factor) value, giving you total control over the balance between compression strength and output quality (Defaults to a recommended 28).
 * **Cancel Anytime:** A dedicated cancel button stops the running encode immediately and cleans up the unfinished output file.
@@ -58,8 +62,10 @@ Ensure you have **Python 3.10+** installed.
 ## 🎮 How to Use
 
 1. Click **Chọn Video (Select Video)** and browse for one or more `.mp4`, `.mkv`, `.mov`, or `.avi` files, or simply **drag & drop** them onto the list. You can select multiple videos to compress them as a batch.
-2. Pick a **codec**: H.265 for the smallest files, or H.264 for the broadest compatibility.
-3. Select your compression level using the **CRF slider**. A lower value means larger files & better quality, whereas a higher value means stronger compression & slightly degraded quality. 28 is the sweet spot.
+2. Pick a **codec**: H.265 for the smallest files, or H.264 for the broadest compatibility, and a **preset** (`ultrafast`…`veryslow`) to balance speed against compression.
+3. Choose a **mode**:
+   * **Quality (CRF):** use the slider. Lower value = larger files & better quality; higher value = stronger compression. 28 is the sweet spot.
+   * **Target Size (MB):** type how big each output should be; the app runs a 2-pass encode to reach it.
 4. *Optional:* Select the 720p downscaler if you're compressing massive videos to send via email or Discord.
 5. *Optional:* Click **Chọn thư mục (Choose Folder)** to save the results somewhere specific, or leave it on the default (next to the source files).
 6. Hit **BẮT ĐẦU NÉN VIDEO (START)** and watch the progress bar and ETA, plus each file's before/after size as it finishes. You can press **HỦY (Cancel)** at any time to stop. The output folder opens automatically when finished.
