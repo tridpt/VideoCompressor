@@ -1,6 +1,7 @@
 # Super Video Compressor
 
 [![Tests](https://github.com/tridpt/VideoCompressor/actions/workflows/tests.yml/badge.svg)](https://github.com/tridpt/VideoCompressor/actions/workflows/tests.yml)
+[![Release](https://img.shields.io/github/v/release/tridpt/VideoCompressor)](https://github.com/tridpt/VideoCompressor/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 
