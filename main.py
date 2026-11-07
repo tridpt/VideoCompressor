@@ -500,11 +500,14 @@ def build_two_pass_commands(input_path, output_path, vcodec, bitrate_kbps,
     null; pass 2 mã hoá thật kèm audio."""
     scale = ['-vf', 'scale=-2:720'] if force_720p else []
     trim = trim_args(ss, to)
+    stats_path = passlogfile.replace('\\', '/')
+    x265_p1 = ['-x265-params', f'pass=1:stats={stats_path}.x265.log'] if vcodec == 'libx265' else []
+    x265_p2 = ['-x265-params', f'pass=2:stats={stats_path}.x265.log'] if vcodec == 'libx265' else []
     pass1 = [
         'ffmpeg', '-y', '-i', input_path, *trim,
         '-c:v', vcodec, '-b:v', f'{bitrate_kbps}k',
         '-preset', preset, *scale,
-        '-pass', '1', '-passlogfile', passlogfile,
+        '-pass', '1', '-passlogfile', passlogfile, *x265_p1,
         '-an', '-f', 'null',
         '-progress', 'pipe:1', '-nostats',
         null_path,
@@ -513,7 +516,7 @@ def build_two_pass_commands(input_path, output_path, vcodec, bitrate_kbps,
         'ffmpeg', '-y', '-i', input_path, *trim,
         '-c:v', vcodec, '-b:v', f'{bitrate_kbps}k',
         '-preset', preset, *scale,
-        '-pass', '2', '-passlogfile', passlogfile,
+        '-pass', '2', '-passlogfile', passlogfile, *x265_p2,
         *audio_args(audio_bitrate),
         '-progress', 'pipe:1', '-nostats',
         output_path,
@@ -1038,7 +1041,7 @@ class VideoCompressorApp(ctk.CTk):
     # ---------- Chọn file ----------
     def select_files(self):
         filetypes = (
-            ('Video files', '*.mp4 *.mkv *.avi *.mov *.flv'),
+            ('Video files', '*.mp4 *.mkv *.avi *.mov *.flv *.wmv *.webm *.m4v'),
             ('All files', '*.*')
         )
         initial = self.last_dir if self.last_dir and os.path.isdir(self.last_dir) else None
